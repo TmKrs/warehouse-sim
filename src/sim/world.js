@@ -5,6 +5,7 @@
 import { Sim, TICK } from './sim.js';
 import { buildMap, TRUCK_HALF } from './map.js';
 import { makeRng } from './random.js';
+import { FactoryFloor } from './factoryFloor.js';
 import { makeCoords } from '../render/coords.js';
 
 export const CLOCK_SPEED = 30; // 1 real second = 30 clock seconds
@@ -70,6 +71,7 @@ export class World {
         made: 0,
       };
     });
+    this.floors = this.factories.map((f) => new FactoryFloor(f, makeRng(this.settings.seed * 7 + f.id)));
     this.stores = this.map.stores.map((m) => ({
       ...m,
       name: STORE_NAMES[m.id],
@@ -133,6 +135,7 @@ export class World {
       }
     }
     this.produce();
+    for (const fl of this.floors) fl.step(TICK, this);
     this.shop();
     this.purchase();
     this.dispatchWaiting();

@@ -9,6 +9,7 @@ import { BoxViews } from './render/boxes.js';
 import { TruckViews } from './render/trucks.js';
 import { Screens } from './render/screens.js';
 import { Region } from './render/region.js';
+import { FactoryInsides } from './render/factoryInside.js';
 import { CameraDirector } from './render/cameras.js';
 import { Ui } from './ui.js';
 
@@ -89,6 +90,7 @@ boxes.setProducts(sim.products);
 const trucks = new TruckViews(scene, C);
 const screens = new Screens(scene, L, C);
 const region = new Region(scene, world);
+const insides = new FactoryInsides(world, (site) => region.siteGroup(site));
 const director = new CameraDirector(camera, controls, C, world.map);
 
 const ui = new Ui(world, {
@@ -161,6 +163,7 @@ let frames = 0;
 let fpsTime = 0;
 let realTime = 0;
 const NEAR_WAREHOUSE = 170; // closer than this, robots and boxes are drawn
+const NEAR_FACTORY = 120; // closer than this, a factory opens up and shows its inside
 
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.1);
@@ -187,6 +190,15 @@ function frame() {
   trucks.update(sim, sim.time + alpha * TICK);
   screens.update(sim, realTime);
   region.update(world, alpha, realTime);
+  // Level of detail: a factory is open (roof off, machines and people inside) only up close.
+  for (let i = 0; i < world.factories.length; i++) {
+    const f = world.factories[i];
+    const p = camera.position;
+    const open = Math.hypot(p.x - f.x, p.y, p.z - f.z) < NEAR_FACTORY;
+    region.openFactory(i, open);
+    insides.setOpen(i, open);
+  }
+  insides.update(world, alpha);
   director.update(dt, robots.state, world, alpha);
 
   sun.target.position.copy(controls.target);
