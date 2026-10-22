@@ -4,6 +4,7 @@ import { CELL } from '../sim/layout.js';
 import { CS, LEVEL_H, SHELF0 } from './coords.js';
 import { Batch } from './merge.js';
 import { GLOW, grassTexture } from './look.js';
+import { Yard } from '../sim/yard.js';
 
 const COLORS = {
   upright: 0x2c5aa0,
@@ -111,6 +112,21 @@ function claddingTexture() {
 }
 
 // A flat strip on the ground, w wide and l long (along z).
+// A painted arrow on the ground pointing toward +x.
+function arrow() {
+  const shape = new THREE.Shape();
+  shape.moveTo(-2, -0.25);
+  shape.lineTo(0.6, -0.25);
+  shape.lineTo(0.6, -0.8);
+  shape.lineTo(2, 0);
+  shape.lineTo(0.6, 0.8);
+  shape.lineTo(0.6, 0.25);
+  shape.lineTo(-2, 0.25);
+  const g = new THREE.ShapeGeometry(shape);
+  g.rotateX(-Math.PI / 2);
+  return g;
+}
+
 function flatLine(w, l) {
   const g = new THREE.PlaneGeometry(w, l);
   g.rotateX(-Math.PI / 2);
@@ -148,28 +164,42 @@ export function buildBuilding(scene, L, C) {
   ground.position.y = -0.06;
   ground.receiveShadow = true;
   group.add(ground);
-  const yard = new THREE.Mesh(
-    new THREE.PlaneGeometry(C.width + 50, 40),
-    new THREE.MeshStandardMaterial({ color: COLORS.yard, roughness: 0.95 }),
-  );
+  // Concrete truck yard in front: gate on the left, parking lot, docks, exit on the right.
+  const Y = new Yard(C, L.docks);
+  const yardMat = new THREE.MeshStandardMaterial({ color: COLORS.yard, roughness: 0.95 });
+  const x0 = Y.gate.x - 12;
+  const x1 = Y.exit.x + 4;
+  const z0 = Y.exitLaneZ - 7;
+  const yard = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, C.frontZ - z0), yardMat);
   yard.rotation.x = -Math.PI / 2;
-  yard.position.set(0, -0.01, C.frontZ - 20);
+  yard.position.set((x0 + x1) / 2, -0.01, (z0 + C.frontZ) / 2);
   yard.receiveShadow = true;
   group.add(yard);
-  const backLot = yard.clone();
-  backLot.scale.set(1, 0.35, 1);
+  const backLot = new THREE.Mesh(new THREE.PlaneGeometry(C.width + 50, 14), yardMat);
+  backLot.rotation.x = -Math.PI / 2;
   backLot.position.set(0, -0.01, C.backZ + 7);
+  backLot.receiveShadow = true;
   group.add(backLot);
 
-  // Yard markings for the waiting trucks.
-  const markMat = new THREE.MeshBasicMaterial({ color: 0xdddddd });
-  for (let i = 0; i < 6; i++) {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 9), markMat);
-    m.rotation.x = -Math.PI / 2;
-    m.rotation.z = Math.PI / 2;
-    m.position.set(-C.width / 2 + 2 + i * 4.2, 0.0, C.frontZ - 30);
-    group.add(m);
+  // Parking lot markings: a line between the stalls, a stop line at the front,
+  // and arrows on the lanes in and out.
+  const marks = new Batch();
+  const white = new THREE.MeshBasicMaterial({ color: 0xdddddd });
+  const yellow = new THREE.MeshBasicMaterial({ color: 0xf2c94c });
+  const pitch = Y.stallX[1] - Y.stallX[0];
+  for (let i = 0; i <= Y.stallX.length; i++) {
+    marks.add(white, flatLine(0.15, 12), Y.stallX[0] - pitch / 2 + i * pitch, 0.005, Y.stallZ);
   }
+  const lotW = pitch * Y.stallX.length;
+  const lotX = Y.stallX[0] - pitch / 2 + lotW / 2;
+  marks.add(yellow, flatLine(lotW, 0.25), lotX, 0.005, Y.stallZ - 6.3);
+  for (let i = 0; i < Y.stallX.length; i++) {
+    marks.add(white, arrow(), Y.stallX[i], 0.006, Y.stallZ + 9, 0, Math.PI / 2);
+  }
+  for (const [x, z] of [[Y.gate.x + 4, Y.gate.z], [lotX + 10, Y.exitLaneZ], [Y.exit.x - 14, Y.exit.z]]) {
+    marks.add(white, arrow(), x, 0.006, z);
+  }
+  for (const m of marks.meshes()) group.add(m);
 
   // Warehouse floor.
   const floor = new THREE.Mesh(

@@ -95,6 +95,7 @@ export class Ui {
     bind('setRobots', 'robotsOut', () => world.settings.robots, () => {}, (v) => v);
     bind('setFactories', 'factoriesOut', () => world.settings.factories, () => {}, (v) => v);
     bind('setStores', 'storesOut', () => world.settings.stores, () => {}, (v) => v);
+    bind('setFleet', 'fleetOut', () => world.settings.trucksPerFactory, (v) => { world.settings.trucksPerFactory = v; }, (v) => v);
     bind('setCustomers', 'customersOut', () => world.settings.customersPerHour, (v) => { world.settings.customersPerHour = v; }, (v) => v);
     bind('setFill', 'fillOut', () => Math.round(world.settings.targetFill * 100), (v) => { world.settings.targetFill = v / 100; }, (v) => `${v}%`);
     $('settingsBtn').addEventListener('click', () => {
