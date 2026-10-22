@@ -1,0 +1,9 @@
+{
+  "name": "warehouse-sim",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/sim.test.mjs",
+    "start": "npx http-server -c-1 -p 8080 ."
+  }
+}

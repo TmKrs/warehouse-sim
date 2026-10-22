@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Warehouse Sim</title>
+  <meta name="description" content="A 3D warehouse where robots store and pick boxes on their own, built in the browser with Three.js.">
+  <link rel="stylesheet" href="styles.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.min.js",
+        "three/addons/": "./vendor/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+
+  <header id="topbar" class="glass">
+    <div class="brand">
+      <span class="logo">▣</span>
+      <div>
+        <strong>Warehouse Sim</strong>
+        <span id="clock">06:00:00</span>
+      </div>
+    </div>
+    <div class="speed">
+      <button id="pause" title="Pause / play (space)">❚❚</button>
+      <input id="speed" type="range" min="1" max="5" step="1" value="1" aria-label="Speed">
+      <span id="speedLabel">1x</span>
+    </div>
+    <span id="fps">-- FPS</span>
+    <button id="settingsBtn" class="ghost">Settings</button>
+  </header>
+
+  <nav id="views" class="glass">
+    <button data-view="overview" class="active">Overview</button>
+    <button data-view="docks">Truck docks</button>
+    <button data-view="shipping">Shipping</button>
+    <button data-view="top">Top-down</button>
+    <button data-view="ride">Ride along</button>
+  </nav>
+
+  <aside id="panel" class="glass">
+    <button id="panelToggle" class="ghost small">Hide</button>
+    <section>
+      <h2>Storage</h2>
+      <div class="big"><span id="stored">0</span> / <span id="capacity">0</span> <span id="fillPct" class="pct">0%</span></div>
+      <div class="bar"><div id="fillBar"></div></div>
+      <div id="rows" class="rows"></div>
+    </section>
+    <section>
+      <h2>Orders</h2>
+      <div class="grid">
+        <div><span id="openOrders">0</span><label>open</label></div>
+        <div><span id="overdue">0</span><label>overdue</label></div>
+        <div><span id="backorders">0</span><label>waiting for stock</label></div>
+        <div><span id="onTime">0</span><label>shipped on time</label></div>
+        <div><span id="late">0</span><label>shipped late</label></div>
+        <div><span id="onTimePct">–</span><label>on-time rate</label></div>
+      </div>
+    </section>
+    <section>
+      <h2>Robots</h2>
+      <div class="grid">
+        <div><span id="busy">0</span><label>busy</label></div>
+        <div><span id="waitPct">0%</span><label>time in traffic</label></div>
+        <div><span id="dwell">–</span><label>avg. time on shelf</label></div>
+      </div>
+    </section>
+    <section>
+      <h2>Truck arrivals</h2>
+      <table id="arrivals">
+        <thead><tr><th>Truck</th><th>Planned</th><th>Boxes</th><th>Status</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>What's happening</h2>
+      <ul id="log"></ul>
+    </section>
+  </aside>
+
+  <div id="info" class="glass hidden"></div>
+
+  <p id="hint">Drag to rotate · scroll to zoom · right-drag to pan · click a robot or a box</p>
+
+  <dialog id="settings">
+    <form method="dialog">
+      <h2>Settings</h2>
+      <p class="muted">Change how the warehouse runs. No code needed.</p>
+      <label>Robots <output id="robotsOut"></output>
+        <input id="setRobots" type="range" min="4" max="16" step="1">
+      </label>
+      <label>A truck arrives about every <output id="truckOut"></output>
+        <input id="setTruck" type="range" min="20" max="120" step="5">
+      </label>
+      <label>Orders per minute <output id="ordersOut"></output>
+        <input id="setOrders" type="range" min="2" max="15" step="1">
+      </label>
+      <label>Keep the warehouse about <output id="fillOut"></output> full
+        <input id="setFill" type="range" min="50" max="95" step="5">
+      </label>
+      <div class="row">
+        <label class="inline">Look
+          <select id="setTheme">
+            <option value="day">Day</option>
+            <option value="night">Night</option>
+          </select>
+        </label>
+        <label class="inline">Shadows
+          <select id="setShadows">
+            <option value="on">On</option>
+            <option value="off">Off (faster)</option>
+          </select>
+        </label>
+      </div>
+      <p class="muted">Trucks, orders and fill level change right away. A new robot count starts the warehouse again from empty.</p>
+      <div class="actions">
+        <button id="restart" type="button" class="ghost">Start again from empty</button>
+        <button value="close" class="primary">Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
