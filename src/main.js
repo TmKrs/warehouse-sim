@@ -11,6 +11,7 @@ import { Screens } from './render/screens.js';
 import { Region } from './render/region.js';
 import { CameraDirector } from './render/cameras.js';
 import { Ui } from './ui.js';
+import { Look, SUN_DIR } from './render/look.js';
 
 // Settings that change the map (robots, factories, stores) come from the address bar,
 // so "start again" simply reloads the page with new numbers.
@@ -52,33 +53,37 @@ controls.maxPolarAngle = Math.PI * 0.49;
 controls.minDistance = 3;
 controls.maxDistance = 1000;
 
-const hemi = new THREE.HemisphereLight(0xdbeafe, 0x4b5563, 1.0);
+const hemi = new THREE.HemisphereLight(0xdbeafe, 0x6b7558, 1.0);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xfff4e0, 2.4);
+const sun = new THREE.DirectionalLight(0xfff1d6, 2.6);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 const sc = sun.shadow.camera;
-sc.left = -60; sc.right = 60; sc.top = 60; sc.bottom = -60; sc.near = 1; sc.far = 220;
 sun.shadow.bias = -0.0004;
-sun.shadow.normalBias = 0.02;
+sun.shadow.normalBias = 0.03;
 scene.add(sun, sun.target);
-// The sun's shadow follows what you look at, so nearby things always get shadows.
-const SUN_OFFSET = new THREE.Vector3(-35, 70, -45);
+// The sun's shadow follows what you look at and shrinks when you come close,
+// so nearby things get sharp shadows and far views still get some.
+const SUN_DIST = 260;
+const SUN_OFFSET = SUN_DIR.clone().multiplyScalar(SUN_DIST);
+let shadowHalf = 0;
+function fitShadow(dist) {
+  // Steps of 8 m, so zooming does not re-fit the shadow every frame.
+  const half = Math.min(170, Math.max(24, Math.ceil((dist * 0.6) / 8) * 8));
+  if (half === shadowHalf) return;
+  shadowHalf = half;
+  sc.left = -half; sc.right = half; sc.top = half; sc.bottom = -half;
+  sc.near = SUN_DIST - half - 40;
+  sc.far = SUN_DIST + half + 40;
+  sc.updateProjectionMatrix();
+}
 
-const THEMES = {
-  day: { bg: 0xc9d6e3, fog: 0xc9d6e3, hemi: 1.0, sun: 2.4, exposure: 1.0 },
-  night: { bg: 0x0b1222, fog: 0x0b1222, hemi: 0.35, sun: 0.55, exposure: 1.25 },
-};
+const look = new Look(renderer, scene);
 function setTheme(name) {
-  const t = THEMES[name] || THEMES.day;
-  scene.background = new THREE.Color(t.bg);
-  // Fog starts beyond the region, so bigger maps stay clear.
+  // Fog starts beyond the region, so bigger maps stay clear, and has the colour of the horizon.
   const b = world.map.bounds;
   const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ);
-  scene.fog = new THREE.Fog(t.fog, span * 1.1, span * 3.5);
-  hemi.intensity = t.hemi;
-  sun.intensity = t.sun;
-  renderer.toneMappingExposure = t.exposure;
+  look.apply(name, { hemi, sun, fogNear: span * 1.1, fogFar: span * 3.5 });
 }
 setTheme('day');
 
@@ -189,6 +194,7 @@ function frame() {
   region.update(world, alpha, realTime);
   director.update(dt, robots.state, world, alpha);
 
+  fitShadow(camera.position.distanceTo(controls.target));
   sun.target.position.copy(controls.target);
   sun.position.copy(controls.target).add(SUN_OFFSET);
   renderer.render(scene, camera);
@@ -207,4 +213,4 @@ director.go('overview', true);
 requestAnimationFrame(frame);
 
 // Handy for debugging in the browser console.
-window.warehouse = { world, sim, camera, renderer, director, ui };
+window.warehouse = { world, sim, scene, camera, renderer, director, ui };
