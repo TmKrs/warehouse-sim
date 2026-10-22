@@ -2,6 +2,8 @@
 import * as THREE from 'three';
 import { CELL } from '../sim/layout.js';
 import { CS, LEVEL_H, SHELF0 } from './coords.js';
+import { Batch } from './merge.js';
+import { GLOW, grassTexture } from './look.js';
 
 const COLORS = {
   upright: 0x2c5aa0,
@@ -85,18 +87,65 @@ function floorTexture(L) {
   return tex;
 }
 
+// Cladding for the outer walls: vertical ribs over a darker plinth at the bottom.
+function claddingTexture() {
+  const cv = document.createElement('canvas');
+  cv.width = 64;
+  cv.height = 64;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#e4e2dc';
+  g.fillRect(0, 0, 64, 64);
+  for (let x = 0; x < 64; x += 8) {
+    g.fillStyle = 'rgba(0,0,0,0.10)';
+    g.fillRect(x, 0, 2, 64);
+    g.fillStyle = 'rgba(255,255,255,0.35)';
+    g.fillRect(x + 2, 0, 1, 64);
+  }
+  g.fillStyle = '#8f949b';
+  g.fillRect(0, 50, 64, 14);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+// A flat strip on the ground, w wide and l long (along z).
+function flatLine(w, l) {
+  const g = new THREE.PlaneGeometry(w, l);
+  g.rotateX(-Math.PI / 2);
+  return g;
+}
+
 export function buildBuilding(scene, L, C) {
   const group = new THREE.Group();
   scene.add(group);
   const shadowy = (m) => { m.castShadow = true; m.receiveShadow = true; return m; };
 
-  // Outdoor ground and truck yard.
+  // Outdoor ground: tiled grass, with big soft patches of lighter, darker and drier grass
+  // painted into the vertex colours so the tiling does not show from far away.
+  const groundGeo = new THREE.PlaneGeometry(2400, 2400, 64, 64);
+  const gp = groundGeo.attributes.position;
+  const gc = new Float32Array(gp.count * 3);
+  for (let i = 0; i < gp.count; i++) {
+    const x = gp.getX(i);
+    const y = gp.getY(i);
+    const n = Math.sin(x * 0.013 + 1.7) * Math.cos(y * 0.011 - 0.4) + 0.6 * Math.sin((x + y) * 0.027) * Math.sin((x - y) * 0.019 + 2.1);
+    const dry = Math.max(0, Math.sin(x * 0.006 - 2.3) * Math.sin(y * 0.0075 + 1.1) - 0.35) * 1.4;
+    const k = 0.92 + n * 0.07;
+    gc[i * 3] = k + dry * 0.18;
+    gc[i * 3 + 1] = k + dry * 0.08;
+    gc[i * 3 + 2] = k - dry * 0.05;
+  }
+  groundGeo.setAttribute('color', new THREE.BufferAttribute(gc, 3));
+  const grass = grassTexture();
+  grass.repeat.set(2400 / 14, 2400 / 14);
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(2400, 2400),
-    new THREE.MeshStandardMaterial({ color: 0x6f7a62, roughness: 1 }),
+    groundGeo,
+    new THREE.MeshStandardMaterial({ map: grass, vertexColors: true, roughness: 1 }),
   );
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -0.02;
+  ground.position.y = -0.06;
   ground.receiveShadow = true;
   group.add(ground);
   const yard = new THREE.Mesh(
@@ -132,13 +181,17 @@ export function buildBuilding(scene, L, C) {
   group.add(floor);
 
   // Low outer walls with openings for the docks and conveyors.
-  const wallMat = new THREE.MeshStandardMaterial({ color: COLORS.wall, roughness: 0.8 });
+  const wallMat = new THREE.MeshStandardMaterial({ map: claddingTexture(), roughness: 0.8 });
   const trimMat = new THREE.MeshStandardMaterial({ color: COLORS.wallTrim, roughness: 0.6 });
   const wallH = 1.7;
   const wall = (x1, z1, x2, z2) => {
     const len = Math.hypot(x2 - x1, z2 - z1);
     if (len < 0.01) return;
-    const m = shadowy(new THREE.Mesh(new THREE.BoxGeometry(len, wallH, 0.25), wallMat));
+    const geo = new THREE.BoxGeometry(len, wallH, 0.25);
+    // Stretch the texture coordinates so the cladding ribs keep the same spacing on every wall.
+    const uv = geo.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setX(i, uv.getX(i) * len / 2);
+    const m = shadowy(new THREE.Mesh(geo, wallMat));
     m.position.set((x1 + x2) / 2, wallH / 2, (z1 + z2) / 2);
     m.rotation.y = -Math.atan2(z2 - z1, x2 - x1);
     group.add(m);
@@ -251,6 +304,22 @@ export function buildBuilding(scene, L, C) {
     plate.position.set(x, 0.05, C.frontZ - 0.8);
     group.add(plate);
   }
+
+  // Rubber bumpers either side of every dock, a guide line on the ground and a lamp above the door.
+  const dockBatch = new Batch();
+  const rubber = new THREE.MeshStandardMaterial({ color: 0x16181c, roughness: 0.9 });
+  const paint = new THREE.MeshLambertMaterial({ color: 0xf2c014 });
+  for (const d of L.docks) {
+    const x = C.x(d.x);
+    const w = CS * 2;
+    for (const side of [-1, 1]) {
+      dockBatch.box(rubber, 0.3, 0.5, 0.35, x + side * (w / 2 - 0.25), 1.05, C.frontZ - 0.3);
+      // Guide lines for backing up.
+      dockBatch.add(paint, flatLine(0.14, 13), x + side * 1.55, 0.005, C.frontZ - 8.5);
+    }
+    dockBatch.box(GLOW.lamp, 0.5, 0.14, 0.3, x, 3.75, C.frontZ - 0.2);
+  }
+  for (const mesh of dockBatch.meshes({ cast: false })) group.add(mesh);
 
   // Short conveyors through the back wall, straight into the truck for each store.
   const beltMat = new THREE.MeshStandardMaterial({ color: 0x23272e, roughness: 0.8 });
