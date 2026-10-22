@@ -21,18 +21,16 @@ export class CameraDirector {
       const midX = (b.minX + b.maxX) / 2;
       const midZ = (b.minZ + b.maxZ) / 2;
       this.presets.region = { pos: [midX + span * 0.12, span * 0.78, midZ + span * 0.62], target: [midX + span * 0.08, 0, midZ + span * 0.02] };
-      // Factory and store views look at a site from the road side, slightly off centre.
-      const siteView = (s, back, up) => {
-        const p = s.toWorld(40, s.faceV - back);
-        const t = s.toWorld(0, s.faceV + s.depth / 2 - 4);
-        return { pos: [p.x, up, p.z], target: [t.x, 2, t.z] };
-      };
       // The factory view looks over the low front wall into the open hall.
       const f0 = map.factories[0];
       const fp = f0.toWorld(14, f0.faceV - 24);
       const ft = f0.toWorld(10, f0.faceV + 12);
       this.presets.factories = { pos: [fp.x, 32, fp.z], target: [ft.x, 0, ft.z] };
-      this.presets.stores = siteView(map.stores[0], 48, 34);
+      // The store view looks from above the car park over the open shop front.
+      const s0 = map.stores[0];
+      const sp = s0.toWorld(-6, s0.faceV + s0.depth + 17);
+      const st = s0.toWorld(-5, s0.faceV + s0.depth / 2 + 1);
+      this.presets.stores = { pos: [sp.x, 38, sp.z], target: [st.x, 0, st.z] };
     }
     this.tween = null;
     this.rideIndex = 0;

@@ -6,6 +6,7 @@ import { Sim, TICK } from './sim.js';
 import { buildMap, TRUCK_HALF } from './map.js';
 import { makeRng } from './random.js';
 import { FactoryFloor } from './factoryFloor.js';
+import { StoreFloor } from './storeFloor.js';
 import { makeCoords } from '../render/coords.js';
 
 export const CLOCK_SPEED = 30; // 1 real second = 30 clock seconds
@@ -84,7 +85,9 @@ export class World {
       soldTotal: 0,
       lostTotal: 0,
       nextCheck: 0,
+      visits: [], // what each customer bought, for the store's inside (storeFloor.js)
     }));
+    this.storeFloors = this.stores.map((s) => new StoreFloor(s, makeRng(this.settings.seed * 13 + s.id)));
     this.lanes = this.sim.layout.ships.map((ship) => ({ id: ship.id, x: this.C.x(ship.x), truck: null }));
     this.trucks = [];
     this.zones = this.map.zones.map(() => ({ holder: null, queue: [] }));
@@ -136,6 +139,7 @@ export class World {
     }
     this.produce();
     for (const fl of this.floors) fl.step(TICK, this);
+    for (const fl of this.storeFloors) fl.step(TICK, this);
     this.shop();
     this.purchase();
     this.dispatchWaiting();
@@ -199,6 +203,15 @@ export class World {
     return pos;
   }
 
+  // Boxes on their way to the warehouse: waiting at factories, on the road and in the yard.
+  inbound() {
+    let n = 0;
+    for (const t of this.sim.trucks) if (t.status !== 'gone' && t.status !== 'leaving') n += t.load.length - t.unloaded;
+    for (const f of this.factories) for (const po of f.orders) if (po.status === 'waiting' || po.status === 'loading') n += po.items.length;
+    for (const t of this.trucks) if (t.kind === 'in') n += t.cargo.length;
+    return n;
+  }
+
   purchase() {
     if (this.time < this.nextPurchase) return;
     this.nextPurchase = this.time + 5;
@@ -206,6 +219,9 @@ export class World {
     const target = this.settings.targetFill * sim.capacity;
     const pos = this.position();
     let room = target - pos.reduce((a, p) => a + Math.max(0, p), 0);
+    // Boxes already picked for store orders still take up shelf space; when the
+    // robots fall behind, don't buy more than physically fits.
+    room = Math.min(room, sim.capacity * 0.9 - sim.stored - this.inbound());
     const backorder = pos.map((p) => p < 0);
     for (const f of this.factories) {
       const open = f.orders.filter((po) => po.status === 'waiting' || po.status === 'loading').length;
@@ -242,17 +258,21 @@ export class World {
       if (this.rng.next() >= chance) continue;
       st.customersToday++;
       const n = 1 + this.rng.weighted([0.6, 0.3, 0.1]);
+      const visit = { bought: [], missed: [] };
       for (let k = 0; k < n; k++) {
         const p = this.rng.weighted(sim.products.map((x) => x.share));
         if (st.stock[p] > 0) {
           st.stock[p]--;
           st.soldToday++;
           st.soldTotal++;
+          visit.bought.push(p);
         } else {
           st.lostToday++;
           st.lostTotal++;
+          visit.missed.push(p);
         }
       }
+      st.visits.push(visit);
     }
   }
 
@@ -265,7 +285,7 @@ export class World {
       let empty = false;
       this.sim.products.forEach((p) => {
         const have = st.stock[p.id] + st.onOrder[p.id];
-        if (have <= 4) {
+        if (have <= 6) {
           for (let k = have; k < SHELF_MAX; k++) want.push(p.id);
           if (st.stock[p.id] === 0) empty = true;
         }
@@ -447,7 +467,7 @@ export class World {
           po.status = 'loading';
           t.loadUntil = now + po.items.length * 0.6;
         }
-      } else if (po.status === 'loading' && now >= t.loadUntil && (this.floors[f.id].boxesOwed(t.dock) === 0 || now > t.loadUntil + 90)) {
+      } else if (po.status === 'loading' && now >= t.loadUntil && (this.floors[f.id].boxesOwed(t.dock) === 0 || now > t.loadUntil + 150)) {
         // The truck leaves once the forklifts have brought every box to its dock.
         po.status = 'shipped';
         t.cargo = [...po.items];
@@ -511,7 +531,7 @@ export class World {
       const dz = target.z - t.z;
       const dist = Math.hypot(dx, dz);
       const rev = !!target.rev;
-      const cruise = rev ? 2.5 : target.site ? 5 : 11;
+      const cruise = rev ? 3.2 : target.site ? 5.5 : 11;
       let want = cruise;
       // Slow down for the end of the route.
       if (!t.path[t.seg + 1]) want = Math.min(want, Math.max(1.5, dist * 0.8));
@@ -571,17 +591,21 @@ export class World {
       const mine = st.queue.find((q) => q.id === t.id);
       if (mine) mine.tick = this.tick;
       else st.queue.push({ id: t.id, tick: this.tick });
-      if (st.holder !== null || st.queue[0].id !== t.id) {
+      // Trucks ahead in the line that can't go yet (no room past the crossing) don't hold us up.
+      const ahead = st.queue.slice(0, st.queue.findIndex((q) => q.id === t.id));
+      if (st.holder !== null || ahead.some((q) => q.stuck !== this.tick && q.stuck !== this.tick - 1)) {
         t.why = `zone ${i}`;
         return false;
       }
       // Don't block the crossing: only go in if there is room on the far side.
       if (!this.roomAfter(t, zn)) {
+        // Keep our place, but let trucks going another way use the crossing.
+        st.queue.find((q) => q.id === t.id).stuck = this.tick;
         t.why = `no room after zone ${i}`;
         return false;
       }
       st.holder = t.id;
-      st.queue.shift();
+      st.queue = st.queue.filter((q) => q.id !== t.id);
       (t.zones ??= new Set()).add(i);
     }
     // 2. Keep a gap to every other truck in the direction we drive.
@@ -608,7 +632,14 @@ export class World {
     let past = 0;
     for (let k = t.seg; k < t.path.length; k++) {
       const p = t.path[k];
-      if (p.rev || p.dock) return true; // backing into a dock inside the zone
+      if (p.rev || p.dock) {
+        // Backing into a dock inside the zone: only once the last truck has pulled out.
+        // Nobody may stand on the straight stretch from the turning point into the dock.
+        const j = t.path.findIndex((q, n) => n >= k && q.dock);
+        const dock = t.path[j] ?? p;
+        const from = t.path[j - 1] ?? { x, z };
+        return !this.trucks.some((o) => o !== t && distToSegment(o.x, o.z, from, dock) < 2);
+      }
       const len = Math.hypot(p.x - x, p.z - z);
       const ux = (p.x - x) / (len || 1);
       const uz = (p.z - z) / (len || 1);
@@ -711,6 +742,14 @@ function project(corners, nx, nz) {
     hi = Math.max(hi, d);
   }
   return [lo, hi];
+}
+
+function distToSegment(px, pz, a, b) {
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const len2 = dx * dx + dz * dz || 1;
+  const k = Math.max(0, Math.min(1, ((px - a.x) * dx + (pz - a.z) * dz) / len2));
+  return Math.hypot(px - (a.x + dx * k), pz - (a.z + dz * k));
 }
 
 function pathLength(t, path) {

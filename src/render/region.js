@@ -5,6 +5,9 @@ import { makeTruck } from './trucks.js';
 import { TRUCK_HALF } from '../sim/map.js';
 import { SHELF_MAX } from '../sim/world.js';
 import { makeRng } from '../sim/random.js';
+import { STORE, parkedCars } from '../sim/storeFloor.js';
+import { Batch } from './merge.js';
+import { GLOW, shiny } from './look.js';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 
@@ -17,6 +20,51 @@ function canvasPanel(w, h, pxPerM = 60) {
   tex.anisotropy = 8;
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }));
   return { cv, g: cv.getContext('2d'), tex, mesh };
+}
+
+// Two geometries as one (both need the same attributes).
+function mergeTwo(a, b) {
+  const batch = new Batch();
+  batch.add('x', a).add('x', b);
+  return batch.geometries().get('x');
+}
+
+// Materials shared by the merged details on every site.
+const DETAIL = shiny(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.35 }));
+const LINES = new THREE.MeshLambertMaterial({ vertexColors: true });
+const FENCE = new THREE.MeshStandardMaterial({ color: 0x8a939c, roughness: 0.7, metalness: 0.4, transparent: true, opacity: 0.35, depthWrite: false });
+
+// A flat strip on the ground, w wide and l long (along z).
+function groundLine(w, l) {
+  const geo = new THREE.PlaneGeometry(w, l);
+  geo.rotateX(-Math.PI / 2);
+  return geo;
+}
+
+// Metal wall cladding: light panels with vertical ribs, repeated along the wall.
+let ribTex = null;
+function ribTexture() {
+  if (ribTex) return ribTex;
+  const cv = document.createElement('canvas');
+  cv.width = 128;
+  cv.height = 64;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#d6d3cc';
+  g.fillRect(0, 0, 128, 64);
+  for (let x = 0; x < 128; x += 8) {
+    g.fillStyle = 'rgba(0,0,0,0.13)';
+    g.fillRect(x, 0, 2, 64);
+    g.fillStyle = 'rgba(255,255,255,0.3)';
+    g.fillRect(x + 2, 0, 1, 64);
+  }
+  g.fillStyle = '#a19d95';
+  g.fillRect(0, 58, 128, 6);
+  ribTex = new THREE.CanvasTexture(cv);
+  ribTex.colorSpace = THREE.SRGBColorSpace;
+  ribTex.wrapS = THREE.RepeatWrapping;
+  ribTex.repeat.set(4, 1);
+  ribTex.anisotropy = 4;
+  return ribTex;
 }
 
 const mat = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.75, ...extra });
@@ -50,19 +98,36 @@ export class Region {
     const strips = [];
     const dashes = [];
     const edges = [];
+    const kerbs = [];
+    // Ends of the wide roads, where the narrow site roads join them.
+    const wideEnds = map.roads.filter((r) => r.width >= 9).flatMap((r) => [r.a, r.b]);
+    const onWide = (p) => wideEnds.some((q) => Math.abs(q.x - p.x) < 1 && Math.abs(q.z - p.z) < 1);
     for (const r of map.roads) {
       const dx = r.b.x - r.a.x;
       const dz = r.b.z - r.a.z;
       const len = Math.hypot(dx, dz);
       if (len < 0.1) continue;
       const angle = Math.atan2(dx, dz);
-      strips.push([(r.a.x + r.b.x) / 2, 0.02, (r.a.z + r.b.z) / 2, angle, r.width, len + r.width]);
+      strips.push([(r.a.x + r.b.x) / 2, 0.035, (r.a.z + r.b.z) / 2, angle, r.width, len + r.width]);
+      // A light concrete kerb and verge just wider than the asphalt; overlapping pieces join up cleanly.
+      kerbs.push([(r.a.x + r.b.x) / 2, -0.03, (r.a.z + r.b.z) / 2, angle, r.width + 1.6, len + r.width + 1.6]);
+      if (r.width < 9) {
+        // Stop line on the lane that leads onto the main road.
+        for (const [end, other] of [[r.a, r.b], [r.b, r.a]]) {
+          if (!onWide(end)) continue;
+          const fx = (end.x - other.x) / len;
+          const fz = (end.z - other.z) / len;
+          const back = 4.5 + 1.4;
+          const side = r.width / 4;
+          dashes.push([end.x - fx * back - fz * side, 0.06, end.z - fz * back + fx * side, angle, r.width / 2 - 0.4, 0.45]);
+        }
+      }
       if (r.width < 9) continue;
-      for (let d = 3; d < len - 2; d += 7) dashes.push([r.a.x + (dx * d) / len, 0.05, r.a.z + (dz * d) / len, angle, 0.2, 3]);
+      for (let d = 3; d < len - 2; d += 7) dashes.push([r.a.x + (dx * d) / len, 0.06, r.a.z + (dz * d) / len, angle, 0.2, 3]);
       for (const side of [-1, 1]) {
         const nx = (dz / len) * side * (r.width / 2 - 0.4);
         const nz = (-dx / len) * side * (r.width / 2 - 0.4);
-        edges.push([(r.a.x + r.b.x) / 2 + nx, 0.04, (r.a.z + r.b.z) / 2 + nz, angle, 0.15, len]);
+        edges.push([(r.a.x + r.b.x) / 2 + nx, 0.05, (r.a.z + r.b.z) / 2 + nz, angle, 0.15, len]);
       }
     }
     const flat = (list, material) => {
@@ -79,6 +144,7 @@ export class Region {
       mesh.receiveShadow = true;
       g.add(mesh);
     };
+    flat(kerbs, mat(0xa3a39b, { roughness: 1 }));
     flat(strips, mat(0x3f4348, { roughness: 0.95 }));
     flat(dashes, new THREE.MeshBasicMaterial({ color: 0xe5e7eb }));
     flat(edges, new THREE.MeshBasicMaterial({ color: 0xbfc4ca }));
@@ -87,6 +153,7 @@ export class Region {
     this.storeSigns = world.stores.map((s) => this.buildStore(s));
     this.buildDepot(map.depot);
     this.buildTrees(world);
+    this.buildLamps(map);
     this.lastDraw = -1;
   }
 
@@ -107,7 +174,7 @@ export class Region {
     const H = 10;
     const cz = -(f.faceV + D / 2); // building centre
     const face = -f.faceV; // the wall with the docks, facing the road
-    const wall = mat(0xd6d3cc);
+    const wall = mat(0xffffff, { map: ribTexture() });
     const darker = mat(0x9ca3af, { metalness: 0.3 });
     const accent = mat(0x0f766e);
     // Concrete apron in front of the docks.
@@ -179,7 +246,10 @@ export class Region {
     sign.mesh.position.set(-6, 6.6, face + 0.12);
     g.add(sign.mesh);
     closed.push(sign.mesh);
-    return { sign, f, products: world.sim.products, closed, open, isOpen: false };
+    // Outside details (tanks, pipes, roof vents, fence); hidden with the roof when open.
+    const details = this.factoryDetails(g, f, W, D, H, cz, face);
+    closed.push(details);
+    return { sign, f, products: world.sim.products, closed, open, isOpen: false, details };
   }
 
   // Close up, a factory loses its roof and front wall so you can look inside.
@@ -199,21 +269,61 @@ export class Region {
     const face = -s.faceV; // delivery side, facing the road
     const cz = face - D / 2;
     const shop = cz - D / 2; // shop front, facing the customers' car park
-    const body = shadowy(new THREE.Mesh(new THREE.BoxGeometry(W, H, D), mat(0xf1f5f9)));
-    body.position.set(0, H / 2, cz);
-    g.add(body);
-    const roof = shadowy(new THREE.Mesh(new THREE.BoxGeometry(W + 1, 0.6, D + 1), mat(0x334155)));
-    roof.position.set(0, H + 0.3, cz);
-    g.add(roof);
-    const glass = new THREE.Mesh(
-      new THREE.BoxGeometry(W - 6, 4, 0.2),
-      new THREE.MeshStandardMaterial({ color: 0x7dd3fc, roughness: 0.1, metalness: 0.6, transparent: true, opacity: 0.75 }),
-    );
-    glass.position.set(0, 2.4, shop - 0.05);
-    g.add(glass);
-    const canopy = shadowy(new THREE.Mesh(new THREE.BoxGeometry(W - 4, 0.4, 3), mat(0xdc2626)));
-    canopy.position.set(0, 4.8, shop - 1.5);
-    g.add(canopy);
+    const wall = mat(0xf1f5f9);
+    // The building is made of walls and a roof, so close up the roof and the
+    // shop front can be hidden to look inside (see openStore).
+    const T = 0.3;
+    const part = (w, h, d, x, y, z, material = wall) => {
+      const m = shadowy(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material));
+      m.position.set(x, y, z);
+      g.add(m);
+      return m;
+    };
+    part(W, H, T, 0, H / 2, face - T / 2); // delivery wall
+    part(T, H, D, -W / 2 + T / 2, H / 2, cz);
+    part(T, H, D, W / 2 - T / 2, H / 2, cz);
+    const roof = part(W + 1, 0.6, D + 1, 0, H + 0.3, cz, mat(0x334155));
+    const closed = [roof];
+    const open = [];
+    // Shop front: glass between the corners, a band above, two sliding doors.
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x7dd3fc, roughness: 0.1, metalness: 0.6, transparent: true, opacity: 0.75 });
+    const frameMat = mat(0x475569, { metalness: 0.5, roughness: 0.4 });
+    const fz = shop + T / 2;
+    closed.push(part(W, H - 4.4, T, 0, 4.4 + (H - 4.4) / 2, fz));
+    closed.push(part(1.5, 4.4, T, -W / 2 + 0.75, 2.2, fz), part(1.5, 4.4, T, W / 2 - 0.75, 2.2, fz));
+    const doors = [STORE.entranceU, STORE.exitU];
+    const dh = STORE.doorWidth / 2;
+    const cuts = [-W / 2 + 1.5, ...doors.flatMap((u) => [u - dh, u + dh]), W / 2 - 1.5];
+    for (let k = 0; k < cuts.length; k += 2) {
+      const w = cuts[k + 1] - cuts[k];
+      const x = (cuts[k] + cuts[k + 1]) / 2;
+      const glass = new THREE.Mesh(new THREE.BoxGeometry(w, 4.4, 0.12), glassMat);
+      glass.position.set(x, 2.2, fz);
+      g.add(glass);
+      closed.push(glass);
+      // A low wall under the windows, shown when the store is open to look into.
+      const low = part(w, 0.9, T, x, 0.45, fz);
+      low.visible = false;
+      open.push(low);
+    }
+    const lowCorner = [part(1.5, 0.9, T, -W / 2 + 0.75, 0.45, fz), part(1.5, 0.9, T, W / 2 - 0.75, 0.45, fz)];
+    for (const m of lowCorner) {
+      m.visible = false;
+      open.push(m);
+    }
+    // Door frames and the glass door leaves, half open.
+    for (const u of doors) {
+      part(0.18, 2.8, 0.36, u - dh, 1.4, fz, frameMat);
+      part(0.18, 2.8, 0.36, u + dh, 1.4, fz, frameMat);
+      part(STORE.doorWidth + 0.36, 0.3, 0.4, u, 2.9, fz, frameMat);
+      for (const side of [-1, 1]) {
+        const leaf = new THREE.Mesh(new THREE.BoxGeometry(dh - 0.1, 2.6, 0.06), glassMat);
+        leaf.position.set(u + side * (dh - 0.05 + 0.2), 1.35, fz + 0.12);
+        g.add(leaf);
+      }
+    }
+    const canopy = part(W - 4, 0.4, 3, 0, 4.8, shop - 1.5, mat(0xdc2626));
+    closed.push(canopy);
     // Delivery door.
     const door = new THREE.Mesh(new THREE.BoxGeometry(3.4, 3.8, 0.2), mat(0x64748b, { metalness: 0.4 }));
     door.position.set(s.dockU, 2.2, face + 0.05);
@@ -223,43 +333,172 @@ export class Region {
     apron.position.set(0, 0.01, face + 8);
     apron.receiveShadow = true;
     g.add(apron);
-    // Customer car park with a few cars.
+    // Pavement along the shop front, then the customer car park.
+    const pave = new THREE.Mesh(new THREE.PlaneGeometry(W + 10, 3.2), mat(0xb8b5ae, { roughness: 1 }));
+    pave.rotation.x = -Math.PI / 2;
+    pave.position.set(0, 0.018, shop - 1.6);
+    pave.receiveShadow = true;
+    g.add(pave);
     const lot = new THREE.Mesh(new THREE.PlaneGeometry(W + 10, 22), mat(0x52565c, { roughness: 1 }));
     lot.rotation.x = -Math.PI / 2;
     lot.position.set(0, 0.015, shop - 14);
     lot.receiveShadow = true;
     g.add(lot);
+    // Parking bay lines and walkways to the doors.
+    const bays = [];
+    for (const w of STORE.rows) {
+      for (let k = 0; k < STORE.carSlots.length; k++) {
+        const u = STORE.carSlots[k];
+        for (const e of [-1.5, 1.5]) bays.push([u + e, -(s.faceV + w), 0.1, 4.6]);
+      }
+    }
+    for (const u of doors) {
+      for (let w = D + 3.4; w < STORE.rows[0] + 2.5; w += 0.9) bays.push([u, -(s.faceV + w), 2.6, 0.45]);
+    }
+    const lineGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+    const lines = new THREE.InstancedMesh(lineGeo, new THREE.MeshBasicMaterial({ color: 0xe5e7eb }), bays.length);
+    const lm = new THREE.Matrix4();
+    bays.forEach(([x, z, w, d], i) => lines.setMatrixAt(i, lm.makeScale(w, 1, d).setPosition(x, 0.03, z)));
+    g.add(lines);
+    // Parked cars: their fronts face the shop; customers get in and out there.
     const carColors = [0xef4444, 0x3b82f6, 0xf8fafc, 0x111827, 0x22c55e, 0xeab308, 0x94a3b8];
-    for (let k = 0; k < 9; k++) {
+    for (const c of parkedCars(s.id)) {
       const car = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.8, 4.2), mat(carColors[(k * 3 + s.id) % carColors.length], { metalness: 0.4, roughness: 0.4 }));
+      const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.8, 4.2), mat(carColors[c.color], { metalness: 0.4, roughness: 0.4 }));
       body.position.y = 0.6;
       const top = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.6, 2.2), mat(0x1f2937, { metalness: 0.5, roughness: 0.2 }));
       top.position.set(0, 1.25, -0.2);
       car.add(body, top);
-      car.position.set(-W / 2 + 3 + k * 4.2, 0, shop - 12 - (k % 2) * 7);
+      car.position.set(c.u, 0, -(s.faceV + c.w));
       car.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-      if ((k * 7 + s.id) % 3 !== 0) g.add(car);
+      g.add(car);
     }
     // Store name above the shop front, and the status sign on the delivery side.
     const front = canvasPanel(W - 8, 2.4, 50);
     front.mesh.position.set(0, 6.0, shop - 0.12);
     front.mesh.rotation.y = Math.PI;
     g.add(front.mesh);
+    closed.push(front.mesh);
     const back = canvasPanel(20, 4.4, 50);
     back.mesh.position.set(6, 4.6, face + 0.12);
     g.add(back.mesh);
-    return { front, back, s };
+    return { front, back, s, closed, open, isOpen: false };
+  }
+
+  // Close up, a store loses its roof and shop front so you can look inside.
+  openStore(i, isOpen) {
+    const ss = this.storeSigns[i];
+    if (!ss || ss.isOpen === isOpen) return;
+    ss.isOpen = isOpen;
+    for (const m of ss.closed) m.visible = !isOpen;
+    for (const m of ss.open) m.visible = isOpen;
+  }
+
+  // Pipes, tanks, windows, a fence, dock bumpers and lamps, and painted lines on the apron.
+  // All of it is merged into a handful of meshes in its own group.
+  factoryDetails(g, f, W, D, H, cz, face) {
+    const b = new Batch();
+    const back = cz - D / 2;
+    const DARK = 0x1f2329;
+    const STEEL = 0xaab2bc;
+    const TANK = 0xdfe3e8;
+    const PIPE = 0x9aa5b1;
+    // Two tanks beside the hall with pipes into the wall.
+    const tank = new THREE.CylinderGeometry(2.2, 2.2, 9, 16);
+    const cap = new THREE.ConeGeometry(2.25, 1.2, 16);
+    const pipe = new THREE.CylinderGeometry(0.22, 0.22, 1, 8);
+    for (const [k, tz] of [[0, cz - 5], [1, cz + 1]]) {
+      const tx = -W / 2 - 4.5 - k * 0.2;
+      b.add(DETAIL, tank, tx, 4.5, tz, 0, 0, 0, TANK);
+      b.add(DETAIL, cap, tx, 9.6, tz, 0, 0, 0, TANK);
+      b.box(DETAIL, 0.6, 0.1, 4.6, tx, 7.0, tz, 0, STEEL);
+      // Pipe from the tank to the wall.
+      b.add(DETAIL, pipe.clone().scale(1, 2.4, 1), tx + 2.2 + 0.6, 6.5 - k * 1.2, tz, 0, 0, Math.PI / 2, PIPE);
+    }
+    // A long pipe along the back wall on brackets, and two downpipes.
+    b.add(DETAIL, pipe.clone().scale(1.4, W - 2, 1.4), 0, H - 1.8, back - 0.6, 0, 0, Math.PI / 2, PIPE);
+    for (let x = -W / 2 + 3; x < W / 2; x += 6) b.box(DETAIL, 0.15, 0.5, 0.7, x, H - 1.8, back - 0.3, 0, STEEL);
+    for (const x of [-W / 2 + 1, W / 2 - 1]) b.add(DETAIL, pipe.clone().scale(0.6, H - 1.8, 0.6), x, (H - 1.8) / 2, back - 0.3, 0, 0, 0, PIPE);
+    // Rooftop vents.
+    const vent = new THREE.CylinderGeometry(0.5, 0.6, 1.4, 10);
+    for (let k = 0; k < 5; k++) b.add(DETAIL, vent, -W / 2 + (k + 0.5) * (W / 5) + 3, H + 0.9, back + 1.6, 0, 0, 0, STEEL);
+    // Windows: a band on both side walls and on the free part of the front.
+    for (const sx of [-1, 1]) {
+      for (let z = back + 2.5; z < face - 2; z += 3.4) b.box(GLOW.window, 0.1, 1.5, 2.6, sx * (W / 2 + 0.03), 6.4, z);
+    }
+    for (let x = 9.5; x < W / 2 - 1.5; x += 3.4) b.box(GLOW.window, 2.6, 1.5, 0.1, x, 6.6, face + 0.03);
+    // Dock bumpers and a lamp over every door.
+    for (const d of f.docks) {
+      for (const s of [-1, 1]) b.box(DETAIL, 0.35, 0.55, 0.4, d.u + s * 1.5, 1.0, face + 0.25, 0, DARK);
+      b.box(GLOW.lamp, 0.6, 0.15, 0.35, d.u, 4.75, face + 0.25);
+    }
+    // Fence around the back and sides of the site.
+    const fx0 = -W / 2 - 9;
+    const fx1 = W / 2 + 6;
+    const fz0 = back - 7;
+    const post = new THREE.CylinderGeometry(0.06, 0.06, 2, 5);
+    const fence = (x1, z1, x2, z2) => {
+      const len = Math.hypot(x2 - x1, z2 - z1);
+      const ry = Math.atan2(x2 - x1, z2 - z1);
+      for (let d = 0; d <= len; d += 3) b.add(DETAIL, post, x1 + ((x2 - x1) * d) / len, 1, z1 + ((z2 - z1) * d) / len, 0, 0, 0, STEEL);
+      for (const y of [0.3, 1.9]) b.box(DETAIL, 0.05, 0.06, len, (x1 + x2) / 2, y, (z1 + z2) / 2, ry, STEEL);
+      // Wire mesh: a thin grey panel.
+      b.box(FENCE, 0.02, 1.6, len, (x1 + x2) / 2, 1.1, (z1 + z2) / 2, ry);
+    };
+    fence(fx0, face - 1, fx0, fz0);
+    fence(fx0, fz0, fx1, fz0);
+    fence(fx1, fz0, fx1, face - 1);
+    // Lines on the apron: guides in front of each dock and staff parking on the right.
+    for (const d of f.docks) {
+      for (const s of [-1, 1]) b.add(LINES, groundLine(0.14, 12), d.u + s * 1.7, 0.03, face + 7, 0, 0, 0, 0xf2c014);
+    }
+    for (let k = 0; k <= 8; k++) b.add(LINES, groundLine(0.12, 5), 16 + k * 2.6, 0.03, face + 3.2, 0, 0, 0, 0xe5e7eb);
+    const group = new THREE.Group();
+    for (const mesh of b.meshes()) {
+      // Only the solid parts cast shadows; paint, glass, lamps and the see-through fence do not.
+      if (mesh.material !== DETAIL) mesh.castShadow = false;
+      group.add(mesh);
+    }
+    g.add(group);
+    return group;
   }
 
   buildDepot(d) {
     const g = this.group;
-    const shed = shadowy(new THREE.Mesh(new THREE.BoxGeometry(16, 6, 12), mat(0x9ca3af, { metalness: 0.3 })));
+    const shed = shadowy(new THREE.Mesh(new THREE.BoxGeometry(16, 6, 12), mat(0xffffff, { map: ribTexture(), metalness: 0.2 })));
     shed.position.set(d.x + 12, 3, d.z);
     g.add(shed);
     const door = new THREE.Mesh(new THREE.BoxGeometry(0.2, 5, 5), mat(0x475569));
     door.position.set(d.x + 3.9, 2.5, d.z);
     g.add(door);
+    // Roof edge, a small office, a fuel pump under a canopy, parking lines and a fence.
+    const b = new Batch();
+    b.box(DETAIL, 16.6, 0.4, 12.6, d.x + 12, 6.2, d.z, 0, 0x475569);
+    b.box(DETAIL, 4, 3, 4, d.x + 17.5, 1.5, d.z + 9, 0, 0xe7e5e4);
+    b.box(DETAIL, 4.4, 0.25, 4.4, d.x + 17.5, 3.1, d.z + 9, 0, 0x334155);
+    b.box(GLOW.window, 2.4, 1, 0.1, d.x + 17.5, 1.8, d.z + 6.97);
+    b.box(DETAIL, 6, 0.3, 4, d.x + 8, 4.6, d.z + 10, 0, 0xdc2626);
+    for (const s of [-1, 1]) b.box(DETAIL, 0.2, 4.5, 0.2, d.x + 8 + s * 2.5, 2.25, d.z + 10, 0, 0xe5e7eb);
+    b.box(DETAIL, 0.8, 1.6, 0.6, d.x + 8, 0.8, d.z + 10, 0, 0x1f2937);
+    b.box(GLOW.lamp, 4.6, 0.08, 2.6, d.x + 8, 4.43, d.z + 10);
+    b.box(GLOW.lamp, 0.6, 0.15, 0.35, d.x + 3.8, 5.3, d.z);
+    for (let k = 0; k < 5; k++) b.add(LINES, groundLine(0.15, 12), d.x - 6 + k * 3.6, 0.03, d.z - 9, 0, Math.PI / 2, 0, 0xe5e7eb);
+    const post = new THREE.CylinderGeometry(0.06, 0.06, 2, 5);
+    for (let x = d.x - 10; x <= d.x + 30; x += 3) {
+      b.add(DETAIL, post, x, 1, d.z + 15, 0, 0, 0, 0xaab2bc);
+    }
+    b.box(DETAIL, 40, 0.06, 0.05, d.x + 10, 1.9, d.z + 15, 0, 0xaab2bc);
+    b.box(FENCE, 40, 1.6, 0.02, d.x + 10, 1.1, d.z + 15);
+    for (const mesh of b.meshes()) {
+      if (mesh.material !== DETAIL) mesh.castShadow = false;
+      g.add(mesh);
+    }
+    // Concrete yard under the parked trucks.
+    const yard = new THREE.Mesh(new THREE.PlaneGeometry(44, 30), mat(0x8d9096, { roughness: 1 }));
+    yard.rotation.x = -Math.PI / 2;
+    yard.position.set(d.x + 8, 0.01, d.z);
+    yard.receiveShadow = true;
+    g.add(yard);
     const sign = canvasPanel(10, 1.8, 50);
     sign.mesh.position.set(d.x + 12, 7.4, d.z - 6.05);
     sign.mesh.rotation.y = Math.PI;
@@ -277,7 +516,6 @@ export class Region {
   buildTrees(world) {
     const map = world.map;
     const rng = makeRng(world.settings.seed + 3).next;
-    const spots = [];
     const { RX, RZ } = map.ring;
     const sites = [...world.factories, ...world.stores];
     const blocked = (x, z) => {
@@ -298,22 +536,120 @@ export class Region {
       return false;
     };
     const b = map.bounds;
-    for (let k = 0; k < 2500 && spots.length < 360; k++) {
-      const x = b.minX - 60 + rng() * (b.maxX - b.minX + 120);
-      const z = b.minZ - 60 + rng() * (b.maxZ - b.minZ + 120);
-      if (!blocked(x, z)) spots.push([x, z, 0.7 + rng() * 0.7]);
+    // Three kinds: conifers, round leafy trees and low bushes. Many grow in small groves.
+    const kinds = [[], [], []];
+    let last = null;
+    for (let k = 0; k < 6000 && kinds[0].length + kinds[1].length + kinds[2].length < 850; k++) {
+      let x;
+      let z;
+      if (last && rng() < 0.55) {
+        x = last[0] + (rng() - 0.5) * 22;
+        z = last[1] + (rng() - 0.5) * 22;
+      } else {
+        x = b.minX - 60 + rng() * (b.maxX - b.minX + 120);
+        z = b.minZ - 60 + rng() * (b.maxZ - b.minZ + 120);
+      }
+      if (blocked(x, z)) continue;
+      last = [x, z];
+      const r = rng();
+      kinds[r < 0.42 ? 0 : r < 0.75 ? 1 : 2].push([x, z, 0.8 + rng() * 0.8, rng() * Math.PI * 2]);
     }
-    const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.25, 0.35, 2.4, 6), mat(0x6b4f35), spots.length);
-    const crown = new THREE.InstancedMesh(new THREE.ConeGeometry(2.2, 5.5, 8), mat(0x2f6b3a), spots.length);
+    const [conifers, leafy, bushes] = kinds;
+    const leafMat = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.9, flatShading: true });
+    // A conifer is two stacked cones in one geometry.
+    const coneLow = new THREE.ConeGeometry(2.3, 3.8, 8, 1, true);
+    coneLow.translate(0, 1.9, 0);
+    const coneHigh = new THREE.ConeGeometry(1.6, 3.4, 8, 1, true);
+    coneHigh.translate(0, 4.1, 0);
+    const coniferGeo = mergeTwo(coneLow, coneHigh);
+    const leafyGeo = new THREE.DodecahedronGeometry(2.3, 0);
+    const bushGeo = new THREE.IcosahedronGeometry(1.3, 0);
+    const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.22, 0.34, 2.6, 6, 1, true), mat(0x6b4f35), conifers.length + leafy.length);
+    const coniferMesh = new THREE.InstancedMesh(coniferGeo, leafMat(0xffffff), conifers.length);
+    const leafyMesh = new THREE.InstancedMesh(leafyGeo, leafMat(0xffffff), leafy.length);
+    const bushMesh = new THREE.InstancedMesh(bushGeo, leafMat(0xffffff), bushes.length);
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
-    spots.forEach(([x, z, s], i) => {
-      trunk.setMatrixAt(i, m.compose(new THREE.Vector3(x, 1.2 * s, z), q, new THREE.Vector3(s, s, s)));
-      crown.setMatrixAt(i, m.compose(new THREE.Vector3(x, (2.4 + 2.5) * s, z), q, new THREE.Vector3(s, s, s)));
-      crown.setColorAt(i, new THREE.Color().setHSL(0.3 + rng() * 0.06, 0.45, 0.24 + rng() * 0.1));
+    const up = new THREE.Vector3(0, 1, 0);
+    const p = new THREE.Vector3();
+    const sc = new THREE.Vector3();
+    const c = new THREE.Color();
+    let t = 0;
+    const addTrunk = (x, z, s) => trunk.setMatrixAt(t++, m.compose(p.set(x, 1.3 * s, z), q.identity(), sc.set(s, s, s)));
+    conifers.forEach(([x, z, s, a], i) => {
+      addTrunk(x, z, s);
+      q.setFromAxisAngle(up, a);
+      coniferMesh.setMatrixAt(i, m.compose(p.set(x, 1.6 * s, z), q, sc.set(s, s * (0.9 + (a % 0.4)), s)));
+      coniferMesh.setColorAt(i, c.setHSL(0.36 + rng() * 0.05, 0.42, 0.2 + rng() * 0.08));
     });
-    trunk.castShadow = crown.castShadow = true;
-    this.group.add(trunk, crown);
+    leafy.forEach(([x, z, s, a], i) => {
+      addTrunk(x, z, s);
+      q.setFromAxisAngle(up, a);
+      leafyMesh.setMatrixAt(i, m.compose(p.set(x, 3.6 * s, z), q, sc.set(s, s * 0.9, s)));
+      // Mostly fresh green, now and then a yellowish one.
+      const hue = rng() < 0.15 ? 0.14 + rng() * 0.05 : 0.24 + rng() * 0.07;
+      leafyMesh.setColorAt(i, c.setHSL(hue, 0.45, 0.3 + rng() * 0.1));
+    });
+    bushes.forEach(([x, z, s, a], i) => {
+      q.setFromAxisAngle(up, a);
+      bushMesh.setMatrixAt(i, m.compose(p.set(x, 0.55 * s, z), q, sc.set(s * 1.2, s * 0.75, s)));
+      bushMesh.setColorAt(i, c.setHSL(0.25 + rng() * 0.07, 0.4, 0.26 + rng() * 0.1));
+    });
+    for (const im of [trunk, coniferMesh, leafyMesh, bushMesh]) {
+      im.castShadow = true;
+      im.receiveShadow = true;
+      this.group.add(im);
+    }
+  }
+
+  // Street lamps along the outside of the ring road; their heads glow at night.
+  buildLamps(map) {
+    const { RX, RZ } = map.ring;
+    const ends = map.roads.flatMap((r) => [r.a, r.b]);
+    const spots = [];
+    const sides = [
+      [[-RX, -RZ], [RX, -RZ], [0, -1]],
+      [[RX, -RZ], [RX, RZ], [1, 0]],
+      [[RX, RZ], [-RX, RZ], [0, 1]],
+      [[-RX, RZ], [-RX, -RZ], [-1, 0]],
+    ];
+    for (const [a, b2, out] of sides) {
+      const len = Math.hypot(b2[0] - a[0], b2[1] - a[1]);
+      for (let d = 18; d < len - 12; d += 34) {
+        const x = a[0] + ((b2[0] - a[0]) * d) / len;
+        const z = a[1] + ((b2[1] - a[1]) * d) / len;
+        // Leave junctions free.
+        if (ends.some((e) => Math.hypot(e.x - x, e.z - z) < 11)) continue;
+        spots.push([x + out[0] * 6.2, z + out[1] * 6.2, Math.atan2(-out[0], -out[1])]);
+      }
+    }
+    // Pole with its arm in one geometry; the arm points along local +z toward the road.
+    const pole = new THREE.CylinderGeometry(0.09, 0.14, 7, 6);
+    pole.translate(0, 3.5, 0);
+    const arm = new THREE.BoxGeometry(0.08, 0.08, 2.2);
+    arm.translate(0, 6.9, 1.0);
+    const poles = new THREE.InstancedMesh(mergeTwo(pole, arm), mat(0x4b5563, { metalness: 0.5, roughness: 0.5 }), spots.length);
+    const headGeo = new THREE.BoxGeometry(0.42, 0.14, 0.8);
+    headGeo.translate(0, 6.84, 2.0);
+    const heads = new THREE.InstancedMesh(headGeo, GLOW.lamp, spots.length);
+    const poolGeo = new THREE.PlaneGeometry(16, 16);
+    poolGeo.rotateX(-Math.PI / 2);
+    poolGeo.translate(0, 0.09, 2.0);
+    const pools = new THREE.InstancedMesh(poolGeo, GLOW.pool, spots.length);
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    const p = new THREE.Vector3();
+    const one = new THREE.Vector3(1, 1, 1);
+    spots.forEach(([x, z, a], i) => {
+      q.setFromAxisAngle(up, a);
+      m.compose(p.set(x, 0, z), q, one);
+      poles.setMatrixAt(i, m);
+      heads.setMatrixAt(i, m);
+      pools.setMatrixAt(i, m);
+    });
+    poles.castShadow = true;
+    this.group.add(poles, heads, pools);
   }
 
   // ---------- every frame ----------
