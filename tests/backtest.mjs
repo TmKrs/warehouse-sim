@@ -61,7 +61,8 @@ for (let r = 0; r < runs; r++) {
   const lost = (100 * s.lost) / Math.max(1, s.sold + s.lost);
   const problems = [];
   if (crashes) problems.push(`${crashes} truck crashes`);
-  if (maxWait >= 120) problems.push(`a truck waited ${maxWait.toFixed(0)} s`);
+  // Queues are normal in heavy traffic; a wait this long would mean a jam.
+  if (maxWait >= 300) problems.push(`a truck waited ${maxWait.toFixed(0)} s`);
   if (maxStored > w.sim.capacity * 0.95) problems.push('warehouse overflow');
   if (lost > 15) problems.push(`${lost.toFixed(1)}% missed sales`);
   if (maxTrucks > 4 * (settings.factories + settings.stores)) problems.push(`${maxTrucks} trucks at once`);

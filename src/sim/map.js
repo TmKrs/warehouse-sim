@@ -13,7 +13,7 @@ export const TRUCK_HALF = 5.5; // centre of a truck to its rear doors
 // road, v points away from it. Access roads at u = ±25 lead to a service road
 // in front of the building; trucks enter on the left, leave on the right.
 const ACCESS = 25;
-const SERVICE = 32; // service road distance from the ring (plus the setback)
+const SERVICE = 36; // service road distance from the ring (plus the setback)
 const SITE_LEFT = -60; // footprint along the road, including the garage
 const SITE_RIGHT = 30;
 export const SITE_DEPTH = { factory: 24, store: 22 };
@@ -354,6 +354,9 @@ function tryBuild(C, factoryCount, storeCount, rng, RX, RZ) {
   }
   for (const s of [...factories, ...stores]) {
     const lo = s.serviceV - 6;
+    // A factory's zone reaches to the garage, so a truck coming home never
+    // squeezes past one waiting to leave.
+    const left = s.kind === 'factory' ? s.garageU + 2 : -ACCESS - 6;
     zones.push({
       kind: 'site', x: s.toWorld(0, s.serviceV).x, z: s.toWorld(0, s.serviceV).z,
       contains: (x, z) => {
@@ -361,7 +364,7 @@ function tryBuild(C, factoryCount, storeCount, rng, RX, RZ) {
         const dz = z - s.origin.z;
         const u = dx * s.U[0] + dz * s.U[1];
         const v = dx * s.V[0] + dz * s.V[1];
-        return u > -ACCESS - 6 && u < ACCESS + 6 && v > lo && v < s.faceV;
+        return u > left && u < ACCESS + 6 && v > lo && v < s.faceV;
       },
     });
   }

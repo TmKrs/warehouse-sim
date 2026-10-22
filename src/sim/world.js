@@ -199,6 +199,15 @@ export class World {
     return pos;
   }
 
+  // Boxes on their way to the warehouse: waiting at factories, on the road and in the yard.
+  inbound() {
+    let n = 0;
+    for (const t of this.sim.trucks) if (t.status !== 'gone' && t.status !== 'leaving') n += t.load.length - t.unloaded;
+    for (const f of this.factories) for (const po of f.orders) if (po.status === 'waiting' || po.status === 'loading') n += po.items.length;
+    for (const t of this.trucks) if (t.kind === 'in') n += t.cargo.length;
+    return n;
+  }
+
   purchase() {
     if (this.time < this.nextPurchase) return;
     this.nextPurchase = this.time + 5;
@@ -206,6 +215,9 @@ export class World {
     const target = this.settings.targetFill * sim.capacity;
     const pos = this.position();
     let room = target - pos.reduce((a, p) => a + Math.max(0, p), 0);
+    // Boxes already picked for store orders still take up shelf space; when the
+    // robots fall behind, don't buy more than physically fits.
+    room = Math.min(room, sim.capacity * 0.9 - sim.stored - this.inbound());
     const backorder = pos.map((p) => p < 0);
     for (const f of this.factories) {
       const open = f.orders.filter((po) => po.status === 'waiting' || po.status === 'loading').length;
@@ -265,7 +277,7 @@ export class World {
       let empty = false;
       this.sim.products.forEach((p) => {
         const have = st.stock[p.id] + st.onOrder[p.id];
-        if (have <= 4) {
+        if (have <= 6) {
           for (let k = have; k < SHELF_MAX; k++) want.push(p.id);
           if (st.stock[p.id] === 0) empty = true;
         }
@@ -511,7 +523,7 @@ export class World {
       const dz = target.z - t.z;
       const dist = Math.hypot(dx, dz);
       const rev = !!target.rev;
-      const cruise = rev ? 2.5 : target.site ? 5 : 11;
+      const cruise = rev ? 3.2 : target.site ? 5.5 : 11;
       let want = cruise;
       // Slow down for the end of the route.
       if (!t.path[t.seg + 1]) want = Math.min(want, Math.max(1.5, dist * 0.8));
@@ -571,17 +583,21 @@ export class World {
       const mine = st.queue.find((q) => q.id === t.id);
       if (mine) mine.tick = this.tick;
       else st.queue.push({ id: t.id, tick: this.tick });
-      if (st.holder !== null || st.queue[0].id !== t.id) {
+      // Trucks ahead in the line that can't go yet (no room past the crossing) don't hold us up.
+      const ahead = st.queue.slice(0, st.queue.findIndex((q) => q.id === t.id));
+      if (st.holder !== null || ahead.some((q) => q.stuck !== this.tick && q.stuck !== this.tick - 1)) {
         t.why = `zone ${i}`;
         return false;
       }
       // Don't block the crossing: only go in if there is room on the far side.
       if (!this.roomAfter(t, zn)) {
+        // Keep our place, but let trucks going another way use the crossing.
+        st.queue.find((q) => q.id === t.id).stuck = this.tick;
         t.why = `no room after zone ${i}`;
         return false;
       }
       st.holder = t.id;
-      st.queue.shift();
+      st.queue = st.queue.filter((q) => q.id !== t.id);
       (t.zones ??= new Set()).add(i);
     }
     // 2. Keep a gap to every other truck in the direction we drive.
@@ -608,7 +624,11 @@ export class World {
     let past = 0;
     for (let k = t.seg; k < t.path.length; k++) {
       const p = t.path[k];
-      if (p.rev || p.dock) return true; // backing into a dock inside the zone
+      if (p.rev || p.dock) {
+        // Backing into a dock inside the zone: only once the last truck has pulled out.
+        const dock = t.path.find((q, j) => j >= k && q.dock) ?? p;
+        return !this.trucks.some((o) => o !== t && Math.hypot(o.x - dock.x, o.z - dock.z) < 8);
+      }
       const len = Math.hypot(p.x - x, p.z - z);
       const ux = (p.x - x) / (len || 1);
       const uz = (p.z - z) / (len || 1);
