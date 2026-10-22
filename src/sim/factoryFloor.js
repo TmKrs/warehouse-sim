@@ -186,6 +186,14 @@ export class FactoryFloor {
     }
   }
 
+  // Boxes still on their way to a dock (waiting in the racks or on a forklift).
+  boxesOwed(dock) {
+    let n = 0;
+    for (const j of this.jobs) if (j.dock === dock) n += j.n;
+    for (const fl of this.forklifts) if (fl.kind === 'out' && fl.dock === dock) n += fl.load.length;
+    return n;
+  }
+
   // Keep the floor's count of every product equal to the factory's stock.
   reconcile() {
     const f = this.factory;
