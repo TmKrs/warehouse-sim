@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tests/sim.test.mjs && node tests/world.test.mjs && node tests/factory.test.mjs",
+    "test": "node tests/sim.test.mjs && node tests/world.test.mjs && node tests/factory.test.mjs && node tests/store.test.mjs",
     "start": "npx http-server -c-1 -p 8080 ."
   }
 }

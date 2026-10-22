@@ -6,6 +6,7 @@ import { Sim, TICK } from './sim.js';
 import { buildMap, TRUCK_HALF } from './map.js';
 import { makeRng } from './random.js';
 import { FactoryFloor } from './factoryFloor.js';
+import { StoreFloor } from './storeFloor.js';
 import { makeCoords } from '../render/coords.js';
 
 export const CLOCK_SPEED = 30; // 1 real second = 30 clock seconds
@@ -84,7 +85,9 @@ export class World {
       soldTotal: 0,
       lostTotal: 0,
       nextCheck: 0,
+      visits: [], // what each customer bought, for the store's inside (storeFloor.js)
     }));
+    this.storeFloors = this.stores.map((s) => new StoreFloor(s, makeRng(this.settings.seed * 13 + s.id)));
     this.lanes = this.sim.layout.ships.map((ship) => ({ id: ship.id, x: this.C.x(ship.x), truck: null }));
     this.trucks = [];
     this.zones = this.map.zones.map(() => ({ holder: null, queue: [] }));
@@ -136,6 +139,7 @@ export class World {
     }
     this.produce();
     for (const fl of this.floors) fl.step(TICK, this);
+    for (const fl of this.storeFloors) fl.step(TICK, this);
     this.shop();
     this.purchase();
     this.dispatchWaiting();
@@ -242,17 +246,21 @@ export class World {
       if (this.rng.next() >= chance) continue;
       st.customersToday++;
       const n = 1 + this.rng.weighted([0.6, 0.3, 0.1]);
+      const visit = { bought: [], missed: [] };
       for (let k = 0; k < n; k++) {
         const p = this.rng.weighted(sim.products.map((x) => x.share));
         if (st.stock[p] > 0) {
           st.stock[p]--;
           st.soldToday++;
           st.soldTotal++;
+          visit.bought.push(p);
         } else {
           st.lostToday++;
           st.lostTotal++;
+          visit.missed.push(p);
         }
       }
+      st.visits.push(visit);
     }
   }
 

@@ -5,6 +5,7 @@ import { makeTruck } from './trucks.js';
 import { TRUCK_HALF } from '../sim/map.js';
 import { SHELF_MAX } from '../sim/world.js';
 import { makeRng } from '../sim/random.js';
+import { STORE, parkedCars } from '../sim/storeFloor.js';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 
@@ -199,21 +200,61 @@ export class Region {
     const face = -s.faceV; // delivery side, facing the road
     const cz = face - D / 2;
     const shop = cz - D / 2; // shop front, facing the customers' car park
-    const body = shadowy(new THREE.Mesh(new THREE.BoxGeometry(W, H, D), mat(0xf1f5f9)));
-    body.position.set(0, H / 2, cz);
-    g.add(body);
-    const roof = shadowy(new THREE.Mesh(new THREE.BoxGeometry(W + 1, 0.6, D + 1), mat(0x334155)));
-    roof.position.set(0, H + 0.3, cz);
-    g.add(roof);
-    const glass = new THREE.Mesh(
-      new THREE.BoxGeometry(W - 6, 4, 0.2),
-      new THREE.MeshStandardMaterial({ color: 0x7dd3fc, roughness: 0.1, metalness: 0.6, transparent: true, opacity: 0.75 }),
-    );
-    glass.position.set(0, 2.4, shop - 0.05);
-    g.add(glass);
-    const canopy = shadowy(new THREE.Mesh(new THREE.BoxGeometry(W - 4, 0.4, 3), mat(0xdc2626)));
-    canopy.position.set(0, 4.8, shop - 1.5);
-    g.add(canopy);
+    const wall = mat(0xf1f5f9);
+    // The building is made of walls and a roof, so close up the roof and the
+    // shop front can be hidden to look inside (see openStore).
+    const T = 0.3;
+    const part = (w, h, d, x, y, z, material = wall) => {
+      const m = shadowy(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material));
+      m.position.set(x, y, z);
+      g.add(m);
+      return m;
+    };
+    part(W, H, T, 0, H / 2, face - T / 2); // delivery wall
+    part(T, H, D, -W / 2 + T / 2, H / 2, cz);
+    part(T, H, D, W / 2 - T / 2, H / 2, cz);
+    const roof = part(W + 1, 0.6, D + 1, 0, H + 0.3, cz, mat(0x334155));
+    const closed = [roof];
+    const open = [];
+    // Shop front: glass between the corners, a band above, two sliding doors.
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x7dd3fc, roughness: 0.1, metalness: 0.6, transparent: true, opacity: 0.75 });
+    const frameMat = mat(0x475569, { metalness: 0.5, roughness: 0.4 });
+    const fz = shop + T / 2;
+    closed.push(part(W, H - 4.4, T, 0, 4.4 + (H - 4.4) / 2, fz));
+    closed.push(part(1.5, 4.4, T, -W / 2 + 0.75, 2.2, fz), part(1.5, 4.4, T, W / 2 - 0.75, 2.2, fz));
+    const doors = [STORE.entranceU, STORE.exitU];
+    const dh = STORE.doorWidth / 2;
+    const cuts = [-W / 2 + 1.5, ...doors.flatMap((u) => [u - dh, u + dh]), W / 2 - 1.5];
+    for (let k = 0; k < cuts.length; k += 2) {
+      const w = cuts[k + 1] - cuts[k];
+      const x = (cuts[k] + cuts[k + 1]) / 2;
+      const glass = new THREE.Mesh(new THREE.BoxGeometry(w, 4.4, 0.12), glassMat);
+      glass.position.set(x, 2.2, fz);
+      g.add(glass);
+      closed.push(glass);
+      // A low wall under the windows, shown when the store is open to look into.
+      const low = part(w, 0.9, T, x, 0.45, fz);
+      low.visible = false;
+      open.push(low);
+    }
+    const lowCorner = [part(1.5, 0.9, T, -W / 2 + 0.75, 0.45, fz), part(1.5, 0.9, T, W / 2 - 0.75, 0.45, fz)];
+    for (const m of lowCorner) {
+      m.visible = false;
+      open.push(m);
+    }
+    // Door frames and the glass door leaves, half open.
+    for (const u of doors) {
+      part(0.18, 2.8, 0.36, u - dh, 1.4, fz, frameMat);
+      part(0.18, 2.8, 0.36, u + dh, 1.4, fz, frameMat);
+      part(STORE.doorWidth + 0.36, 0.3, 0.4, u, 2.9, fz, frameMat);
+      for (const side of [-1, 1]) {
+        const leaf = new THREE.Mesh(new THREE.BoxGeometry(dh - 0.1, 2.6, 0.06), glassMat);
+        leaf.position.set(u + side * (dh - 0.05 + 0.2), 1.35, fz + 0.12);
+        g.add(leaf);
+      }
+    }
+    const canopy = part(W - 4, 0.4, 3, 0, 4.8, shop - 1.5, mat(0xdc2626));
+    closed.push(canopy);
     // Delivery door.
     const door = new THREE.Mesh(new THREE.BoxGeometry(3.4, 3.8, 0.2), mat(0x64748b, { metalness: 0.4 }));
     door.position.set(s.dockU, 2.2, face + 0.05);
@@ -223,33 +264,65 @@ export class Region {
     apron.position.set(0, 0.01, face + 8);
     apron.receiveShadow = true;
     g.add(apron);
-    // Customer car park with a few cars.
+    // Pavement along the shop front, then the customer car park.
+    const pave = new THREE.Mesh(new THREE.PlaneGeometry(W + 10, 3.2), mat(0xb8b5ae, { roughness: 1 }));
+    pave.rotation.x = -Math.PI / 2;
+    pave.position.set(0, 0.018, shop - 1.6);
+    pave.receiveShadow = true;
+    g.add(pave);
     const lot = new THREE.Mesh(new THREE.PlaneGeometry(W + 10, 22), mat(0x52565c, { roughness: 1 }));
     lot.rotation.x = -Math.PI / 2;
     lot.position.set(0, 0.015, shop - 14);
     lot.receiveShadow = true;
     g.add(lot);
+    // Parking bay lines and walkways to the doors.
+    const bays = [];
+    for (const w of STORE.rows) {
+      for (let k = 0; k < STORE.carSlots.length; k++) {
+        const u = STORE.carSlots[k];
+        for (const e of [-1.5, 1.5]) bays.push([u + e, -(s.faceV + w), 0.1, 4.6]);
+      }
+    }
+    for (const u of doors) {
+      for (let w = D + 3.4; w < STORE.rows[0] + 2.5; w += 0.9) bays.push([u, -(s.faceV + w), 2.6, 0.45]);
+    }
+    const lineGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+    const lines = new THREE.InstancedMesh(lineGeo, new THREE.MeshBasicMaterial({ color: 0xe5e7eb }), bays.length);
+    const lm = new THREE.Matrix4();
+    bays.forEach(([x, z, w, d], i) => lines.setMatrixAt(i, lm.makeScale(w, 1, d).setPosition(x, 0.03, z)));
+    g.add(lines);
+    // Parked cars: their fronts face the shop; customers get in and out there.
     const carColors = [0xef4444, 0x3b82f6, 0xf8fafc, 0x111827, 0x22c55e, 0xeab308, 0x94a3b8];
-    for (let k = 0; k < 9; k++) {
+    for (const c of parkedCars(s.id)) {
       const car = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.8, 4.2), mat(carColors[(k * 3 + s.id) % carColors.length], { metalness: 0.4, roughness: 0.4 }));
+      const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.8, 4.2), mat(carColors[c.color], { metalness: 0.4, roughness: 0.4 }));
       body.position.y = 0.6;
       const top = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.6, 2.2), mat(0x1f2937, { metalness: 0.5, roughness: 0.2 }));
       top.position.set(0, 1.25, -0.2);
       car.add(body, top);
-      car.position.set(-W / 2 + 3 + k * 4.2, 0, shop - 12 - (k % 2) * 7);
+      car.position.set(c.u, 0, -(s.faceV + c.w));
       car.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-      if ((k * 7 + s.id) % 3 !== 0) g.add(car);
+      g.add(car);
     }
     // Store name above the shop front, and the status sign on the delivery side.
     const front = canvasPanel(W - 8, 2.4, 50);
     front.mesh.position.set(0, 6.0, shop - 0.12);
     front.mesh.rotation.y = Math.PI;
     g.add(front.mesh);
+    closed.push(front.mesh);
     const back = canvasPanel(20, 4.4, 50);
     back.mesh.position.set(6, 4.6, face + 0.12);
     g.add(back.mesh);
-    return { front, back, s };
+    return { front, back, s, closed, open, isOpen: false };
+  }
+
+  // Close up, a store loses its roof and shop front so you can look inside.
+  openStore(i, isOpen) {
+    const ss = this.storeSigns[i];
+    if (!ss || ss.isOpen === isOpen) return;
+    ss.isOpen = isOpen;
+    for (const m of ss.closed) m.visible = !isOpen;
+    for (const m of ss.open) m.visible = isOpen;
   }
 
   buildDepot(d) {
