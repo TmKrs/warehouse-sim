@@ -4,7 +4,7 @@
 //   z = 1..2       front road
 //   z = 3..        rack rows with one-cell aisles between them
 //   z = D-3..D-2   back road
-//   z = D-1        shipping stations (robots drop boxes for orders here)
+//   z = D-1        shipping lanes (robots drop boxes for orders here, one lane per store)
 //
 // Left and right walls have parking spots where idle robots wait.
 
@@ -12,7 +12,7 @@ export const CELL = { FLOOR: 0, RACK: 1, WALL: 2, DOCK: 3, SHIP: 4, PARK: 5 };
 
 export const ROW_NAMES = 'ABCDEFGHIJ';
 
-export function buildLayout({ rowLevels = [2, 3, 4, 5, 4, 3], rackLength = 12 } = {}) {
+export function buildLayout({ rowLevels = [2, 3, 4, 5, 4, 3], rackLength = 12, lanes = 2 } = {}) {
   const rows = rowLevels.length;
   const W = 3 * rows + 7;
   const D = rackLength + 6;
@@ -68,13 +68,13 @@ export function buildLayout({ rowLevels = [2, 3, 4, 5, 4, 3], rackLength = 12 } 
     docks.push({ id: k, x: x + 0.5, cells });
   }
 
-  // Shipping stations: each has three drop-off cells.
+  // Shipping lanes: two drop-off cells each, one lane per store.
   const ships = [];
-  for (let k = 0; k < 2; k++) {
-    const x = Math.round((W * (k + 1)) / 3);
-    const cells = [idx(x - 1, D - 1), idx(x, D - 1), idx(x + 1, D - 1)];
+  for (let k = 0; k < lanes; k++) {
+    const x = Math.round(2 + ((W - 5) * (k + 0.5)) / lanes);
+    const cells = [idx(x, D - 1), idx(x + 1, D - 1)];
     for (const c of cells) type[c] = CELL.SHIP;
-    ships.push({ id: k, x, cells });
+    ships.push({ id: k, x: x + 0.5, cells });
   }
 
   // Parking spots along the side walls.

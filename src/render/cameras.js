@@ -1,9 +1,10 @@
-// Camera spots (overview, docks, shipping, top-down) and the ride-along view.
+// Camera spots (region, overview, docks, shipping, top-down, factories, stores),
+// the robot ride-along view and following a truck.
 import * as THREE from 'three';
 import { ease } from './coords.js';
 
 export class CameraDirector {
-  constructor(camera, controls, C) {
+  constructor(camera, controls, C, map) {
     this.camera = camera;
     this.controls = controls;
     this.mode = 'overview';
@@ -13,6 +14,22 @@ export class CameraDirector {
       shipping: { pos: [-C.width * 0.3, 7, C.backZ - 10], target: [2, 0.8, C.backZ + 4] },
       top: { pos: [0, 52, 0.01], target: [0, 0, 0] },
     };
+    if (map) {
+      const b = map.bounds;
+      const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ);
+      // From high up on the south side, looking across the whole ring.
+      const midX = (b.minX + b.maxX) / 2;
+      const midZ = (b.minZ + b.maxZ) / 2;
+      this.presets.region = { pos: [midX + span * 0.12, span * 0.78, midZ + span * 0.62], target: [midX + span * 0.08, 0, midZ + span * 0.02] };
+      // Factory and store views look at a site from the road side, slightly off centre.
+      const siteView = (s, back, up) => {
+        const p = s.toWorld(40, s.faceV - back);
+        const t = s.toWorld(0, s.faceV + s.depth / 2 - 4);
+        return { pos: [p.x, up, p.z], target: [t.x, 2, t.z] };
+      };
+      this.presets.factories = siteView(map.factories[0], 55, 38);
+      this.presets.stores = siteView(map.stores[0], 48, 34);
+    }
     this.tween = null;
     this.rideIndex = 0;
     this.ridePos = new THREE.Vector3();
@@ -38,6 +55,14 @@ export class CameraDirector {
     };
   }
 
+  follow(truckId) {
+    this.mode = 'follow';
+    this.followId = truckId;
+    this.controls.enabled = false;
+    this.tween = null;
+    this.rideFresh = true;
+  }
+
   ride(index) {
     this.mode = 'ride';
     this.rideIndex = index;
@@ -46,7 +71,27 @@ export class CameraDirector {
     this.rideFresh = true;
   }
 
-  update(dt, robotState) {
+  update(dt, robotState, world, alpha = 0) {
+    if (this.mode === 'follow') {
+      const t = world?.trucks.find((x) => x.id === this.followId);
+      if (!t) return this.go('region');
+      const h = t.pheading + angleDiff(t.heading, t.pheading) * alpha;
+      const cx = t.px + (t.x - t.px) * alpha;
+      const cz = t.pz + (t.z - t.pz) * alpha;
+      const fx = Math.cos(h);
+      const fz = Math.sin(h);
+      // Chase camera: behind and above the truck.
+      const want = new THREE.Vector3(cx - fx * 22, 11, cz - fz * 22);
+      const look = new THREE.Vector3(cx + fx * 8, 1.5, cz + fz * 8);
+      const k = this.rideFresh ? 1 : Math.min(1, dt * 3);
+      this.rideFresh = false;
+      this.ridePos.lerp(want, k);
+      this.rideLook.lerp(look, k);
+      this.camera.position.copy(this.ridePos);
+      this.camera.lookAt(this.rideLook);
+      this.controls.target.copy(this.rideLook);
+      return;
+    }
     if (this.mode === 'ride') {
       const r = robotState[this.rideIndex];
       if (!r) return;
@@ -77,4 +122,11 @@ export class CameraDirector {
     }
     this.controls.update();
   }
+}
+
+function angleDiff(a, b) {
+  let d = a - b;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return d;
 }
