@@ -447,7 +447,7 @@ export class World {
           po.status = 'loading';
           t.loadUntil = now + po.items.length * 0.6;
         }
-      } else if (po.status === 'loading' && now >= t.loadUntil && (this.floors[f.id].boxesOwed(t.dock) === 0 || now > t.loadUntil + 90)) {
+      } else if (po.status === 'loading' && now >= t.loadUntil && (this.floors[f.id].boxesOwed(t.dock) === 0 || now > t.loadUntil + 150)) {
         // The truck leaves once the forklifts have brought every box to its dock.
         po.status = 'shipped';
         t.cargo = [...po.items];

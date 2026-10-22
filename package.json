@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node tests/sim.test.mjs && node tests/world.test.mjs && node tests/factory.test.mjs",
-    "start": "npx http-server -c-1 -p 8080 ."
+    "start": "npx http-server -c-1 -p 8080 .",
+    "backtest": "node tests/backtest.mjs"
   }
 }

@@ -37,10 +37,10 @@ export const FLOOR = {
 
 const BELT_SPEED = 0.9; // metres per second
 const BOX_GAP = 0.62; // spacing of boxes queued on a belt
-const DRIVE = 3.6; // forklift top speed
+const DRIVE = 4.2; // forklift top speed
 const SAFE = 2.0; // forklift centres never get closer than this
 const LOOK = 4.2; // a forklift stops when another is this close in front
-const FORKLIFTS = 3;
+const FORKLIFTS = 4;
 const WALK = 1.3;
 
 export class FactoryFloor {
