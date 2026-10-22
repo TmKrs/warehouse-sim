@@ -36,23 +36,37 @@
   </header>
 
   <nav id="views" class="glass">
-    <button data-view="overview" class="active">Overview</button>
+    <button data-view="region">Region</button>
+    <button data-view="factories">Factories</button>
+    <button data-view="overview" class="active">Warehouse</button>
     <button data-view="docks">Truck docks</button>
     <button data-view="shipping">Shipping</button>
     <button data-view="top">Top-down</button>
+    <button data-view="stores">Stores</button>
     <button data-view="ride">Ride along</button>
   </nav>
 
   <aside id="panel" class="glass">
     <button id="panelToggle" class="ghost small">Hide</button>
     <section>
-      <h2>Storage</h2>
+      <h2>Supply chain</h2>
+      <div class="grid">
+        <div><span id="chainFactory">0</span><label>ready at factories</label></div>
+        <div><span id="chainRoad">0</span><label>on trucks</label></div>
+        <div><span id="chainWarehouse">0</span><label>in the warehouse</label></div>
+        <div><span id="chainStores">0</span><label>on store shelves</label></div>
+        <div><span id="chainSold">0</span><label>sold</label></div>
+        <div><span id="chainLost">0%</span><label>missed sales</label></div>
+      </div>
+    </section>
+    <section>
+      <h2>Warehouse storage</h2>
       <div class="big"><span id="stored">0</span> / <span id="capacity">0</span> <span id="fillPct" class="pct">0%</span></div>
       <div class="bar"><div id="fillBar"></div></div>
       <div id="rows" class="rows"></div>
     </section>
     <section>
-      <h2>Orders</h2>
+      <h2>Store orders at the warehouse</h2>
       <div class="grid">
         <div><span id="openOrders">0</span><label>open</label></div>
         <div><span id="overdue">0</span><label>overdue</label></div>
@@ -71,9 +85,9 @@
       </div>
     </section>
     <section>
-      <h2>Truck arrivals</h2>
+      <h2>Trucks <small id="truckCount" class="muted"></small></h2>
       <table id="arrivals">
-        <thead><tr><th>Truck</th><th>Planned</th><th>Boxes</th><th>Status</th></tr></thead>
+        <thead><tr><th>Truck</th><th>Route</th><th>Boxes</th></tr></thead>
         <tbody></tbody>
       </table>
     </section>
@@ -85,7 +99,7 @@
 
   <div id="info" class="glass hidden"></div>
 
-  <p id="hint">Drag to rotate · scroll to zoom · right-drag to pan · click a robot or a box</p>
+  <p id="hint">Drag to rotate · scroll to zoom · right-drag to pan · click a truck, robot or box</p>
 
   <dialog id="settings">
     <form method="dialog">
@@ -94,11 +108,14 @@
       <label>Robots <output id="robotsOut"></output>
         <input id="setRobots" type="range" min="4" max="16" step="1">
       </label>
-      <label>A truck arrives about every <output id="truckOut"></output>
-        <input id="setTruck" type="range" min="20" max="120" step="5">
+      <label>Factories <output id="factoriesOut"></output>
+        <input id="setFactories" type="range" min="3" max="8" step="1">
       </label>
-      <label>Orders per minute <output id="ordersOut"></output>
-        <input id="setOrders" type="range" min="2" max="15" step="1">
+      <label>Stores <output id="storesOut"></output>
+        <input id="setStores" type="range" min="3" max="8" step="1">
+      </label>
+      <label>Customers per hour (all stores) <output id="customersOut"></output>
+        <input id="setCustomers" type="range" min="4" max="40" step="1">
       </label>
       <label>Keep the warehouse about <output id="fillOut"></output> full
         <input id="setFill" type="range" min="50" max="95" step="5">
@@ -117,7 +134,7 @@
           </select>
         </label>
       </div>
-      <p class="muted">Trucks, orders and fill level change right away. A new robot count starts the warehouse again from empty.</p>
+      <p class="muted">Customers and fill level change right away. Robots, factories and stores need a fresh start.</p>
       <div class="actions">
         <button id="restart" type="button" class="ghost">Start again from empty</button>
         <button value="close" class="primary">Done</button>

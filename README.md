@@ -1,17 +1,25 @@
 # Warehouse Sim
 
-A 3D warehouse that runs itself. Trucks arrive (some of them late), robots store every box on a shelf and remember where it is, and when an order comes in they pick the boxes and bring them to shipping. You can watch it all live in the browser.
+A 3D supply chain that runs itself. Factories make boxes, trucks bring them to a warehouse where robots store every box on a shelf and remember where it is, and more trucks carry them on to stores where customers buy them. You can watch it all live in the browser.
 
 Built in week 2 of "a new AI project every week".
+
+## The supply chain
+
+- **3 to 8 factories** (setting) each make a few of the 12 products on two production lines and keep finished boxes ready.
+- **The warehouse orders from the factories** when stock runs low, in full truck loads, and never more than fits.
+- **3 to 8 stores** (setting) sell to customers from 8:00 to 20:00, busiest at lunch and after work, and order from the warehouse when shelves run low.
+- **Trucks** drive on the right on a road network, keep their distance, back up to docks, and only leave when there is a reason: a full load, or a store waiting too long.
+- **The day clock** runs 30 times faster than the robots: one real minute is half an hour.
 
 ## What you can do
 
 - **Watch** 10 robots with lifts drive the aisles, lift boxes onto shelves 2 to 5 levels high and bring them to the shipping conveyors.
-- **Switch views**: Overview, Truck docks, Shipping, Top-down, and **Ride along** (see the warehouse through a robot's eyes).
-- **Click** a robot to see its job, or a box to see what it is, where it came from and which order it belongs to.
+- **Switch views**: Region, Factories, Warehouse, Truck docks, Shipping, Top-down, Stores, and **Ride along** (see the warehouse through a robot's eyes).
+- **Click** a truck to see its route and cargo and follow it, a robot to see its job, or a box to see what it is and which store ordered it.
 - **Read the screens** in the hall: the big capacity board and a sign on every rack row.
 - **Speed up** time from 1x to 5x, or pause with the space bar.
-- **Change the settings** (no code): number of robots, how often trucks and orders arrive, how full to keep the warehouse, day or night look.
+- **Change the settings** (no code): robots, factories, stores, customers per hour, how full to keep the warehouse, day or night look.
 
 ## How the "brain" works
 
@@ -23,8 +31,8 @@ All of this is in `src/sim/` and has no 3D code, so it can be tested on its own.
 | Dispatcher (`sim.js`) | Gives each free robot the best job: the nearest one, with urgent orders and full docks first. |
 | Smart storage (`sim.js`) | Popular products go close to shipping and low on the rack, rare ones further away and higher up. |
 | Stock list (`sim.js`) | Remembers the exact shelf of every box and always ships the oldest box first. |
-| Purchasing (`sim.js`) | Orders trucks for products that run low, and never more than fits, so the warehouse does not overflow. |
-| Real life (`sim.js`) | About 3 in 10 trucks are late, orders can arrive for products that are not in stock yet, and every order has a due time. |
+| Supply chain (`world.js`, `map.js`) | Factories, stores, purchasing, store orders, the road network and every truck on it. |
+| Real life | Store orders can arrive for products that are not in stock yet, and every order has a due time. |
 
 ## Run it on your computer
 
@@ -32,7 +40,7 @@ You need [Node.js](https://nodejs.org). Then:
 
 ```bash
 npm start        # opens a small web server on http://localhost:8080
-npm test         # runs the warehouse for hours of warehouse time and checks for crashes and jams
+npm test         # runs the warehouse and the whole chain for days and checks for crashes, jams and overflow
 ```
 
 ## Put it online (Vercel, free)

@@ -1,23 +1,41 @@
-// Starts everything: the warehouse brain, the 3D scene and the controls on screen.
+// Starts everything: the supply chain brain, the 3D scene and the controls on screen.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { Sim, TICK } from './sim/sim.js';
-import { makeCoords } from './render/coords.js';
+import { TICK } from './sim/sim.js';
+import { World, DEFAULT_WORLD } from './sim/world.js';
 import { buildBuilding } from './render/building.js';
 import { RobotViews } from './render/robots.js';
 import { BoxViews } from './render/boxes.js';
 import { TruckViews } from './render/trucks.js';
 import { Screens } from './render/screens.js';
+import { Region } from './render/region.js';
 import { CameraDirector } from './render/cameras.js';
 import { Ui } from './ui.js';
 
-const sim = new Sim();
+// Settings that change the map (robots, factories, stores) come from the address bar,
+// so "start again" simply reloads the page with new numbers.
+const params = new URLSearchParams(location.search);
+const num = (key, min, max) => {
+  const v = Number(params.get(key));
+  return Number.isFinite(v) && v >= min && v <= max ? v : DEFAULT_WORLD[key];
+};
+const world = new World({
+  robots: num('robots', 4, 16),
+  factories: num('factories', 3, 8),
+  stores: num('stores', 3, 8),
+  customersPerHour: num('customersPerHour', 4, 40),
+});
+const sim = world.sim;
 const L = sim.layout;
-const C = makeCoords(L);
+const C = world.C;
 
 // ---------- renderer and scene ----------
 const canvas = document.getElementById('scene');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({
+  canvas, antialias: true, powerPreference: 'high-performance',
+  // Keeps far-away flat surfaces (roads on grass) from flickering.
+  logarithmicDepthBuffer: true,
+});
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -25,24 +43,25 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 400);
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 2500);
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.49;
 controls.minDistance = 3;
-controls.maxDistance = 120;
+controls.maxDistance = 700;
 
 const hemi = new THREE.HemisphereLight(0xdbeafe, 0x4b5563, 1.0);
 scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff4e0, 2.4);
-sun.position.set(-25, 45, -30);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 const sc = sun.shadow.camera;
-sc.left = -45; sc.right = 45; sc.top = 45; sc.bottom = -45; sc.near = 1; sc.far = 140;
+sc.left = -60; sc.right = 60; sc.top = 60; sc.bottom = -60; sc.near = 1; sc.far = 220;
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.02;
-scene.add(sun);
+scene.add(sun, sun.target);
+// The sun's shadow follows what you look at, so nearby things always get shadows.
+const SUN_OFFSET = new THREE.Vector3(-35, 70, -45);
 
 const THEMES = {
   day: { bg: 0xc9d6e3, fog: 0xc9d6e3, hemi: 1.0, sun: 2.4, exposure: 1.0 },
@@ -51,7 +70,7 @@ const THEMES = {
 function setTheme(name) {
   const t = THEMES[name] || THEMES.day;
   scene.background = new THREE.Color(t.bg);
-  scene.fog = new THREE.Fog(t.fog, 90, 220);
+  scene.fog = new THREE.Fog(t.fog, 350, 1400);
   hemi.intensity = t.hemi;
   sun.intensity = t.sun;
   renderer.toneMappingExposure = t.exposure;
@@ -64,10 +83,10 @@ const boxes = new BoxViews(scene, C);
 boxes.setProducts(sim.products);
 const trucks = new TruckViews(scene, C);
 const screens = new Screens(scene, L, C);
-const director = new CameraDirector(camera, controls, C);
+const region = new Region(scene, world);
+const director = new CameraDirector(camera, controls, C, world.map);
 
-// ---------- clicking on things ----------
-const ui = new Ui(sim, {
+const ui = new Ui(world, {
   onView: (name) => {
     if (name === 'ride') {
       if (ui.selected?.type !== 'robot') ui.select({ type: 'robot', index: 0 });
@@ -77,13 +96,13 @@ const ui = new Ui(sim, {
     }
   },
   onRestart: (settings) => {
-    sim.reset(settings);
-    robots.rebuild(sim);
-    boxes.setProducts(sim.products);
-    trucks.clear();
-    ui.select(null);
-    director.go('overview');
+    const q = new URLSearchParams({
+      robots: settings.robots, factories: settings.factories, stores: settings.stores,
+      customersPerHour: world.settings.customersPerHour,
+    });
+    location.search = q.toString();
   },
+  onFollow: (id) => director.follow(id),
   onTheme: setTheme,
   onShadows: (on) => {
     renderer.shadowMap.enabled = on;
@@ -91,6 +110,7 @@ const ui = new Ui(sim, {
   },
 });
 
+// ---------- clicking on things ----------
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let downAt = null;
@@ -100,13 +120,19 @@ canvas.addEventListener('pointerup', (e) => {
   const rect = canvas.getBoundingClientRect();
   pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects([...robots.meshes(), boxes.mesh], true);
+  const targets = [...region.truckMeshes()];
+  if (robots.visible) targets.push(...robots.meshes(), boxes.mesh);
+  const hits = raycaster.intersectObjects(targets, true);
   for (const h of hits) {
     if (h.object === boxes.mesh) {
       const id = boxes.boxIdAt(h.instanceId);
       if (id !== null) return ui.select({ type: 'box', id });
     } else if (h.object.userData.robotIndex !== undefined) {
       return ui.select({ type: 'robot', index: h.object.userData.robotIndex });
+    } else {
+      let o = h.object;
+      while (o && o.userData.truckId === undefined) o = o.parent;
+      if (o) return ui.select({ type: 'truck', id: o.userData.truckId });
     }
   }
   ui.select(null);
@@ -129,6 +155,7 @@ let acc = 0;
 let frames = 0;
 let fpsTime = 0;
 let realTime = 0;
+const NEAR_WAREHOUSE = 170; // closer than this, robots and boxes are drawn
 
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.1);
@@ -136,19 +163,29 @@ function frame() {
   if (!ui.paused) acc += dt * ui.speed;
   let steps = 0;
   while (acc >= TICK && steps < 30) {
-    sim.step();
+    world.step();
     acc -= TICK;
     steps++;
   }
   if (steps === 30) acc = 0;
   const alpha = Math.min(acc / TICK, 1);
 
+  // Level of detail: robots and boxes only when the camera is near the warehouse.
+  const near = director.mode === 'ride' || camera.position.length() < NEAR_WAREHOUSE;
+  robots.visible = near;
+  for (const m of robots.meshes()) m.visible = near;
+  boxes.mesh.visible = near;
+
   const selectedRobot = ui.selected?.type === 'robot' ? ui.selected.index : -1;
   robots.update(sim, alpha, dt, selectedRobot);
-  boxes.update(sim, robots.state, alpha);
+  if (near) boxes.update(sim, robots.state, alpha);
   trucks.update(sim, sim.time + alpha * TICK);
   screens.update(sim, realTime);
-  director.update(dt, robots.state);
+  region.update(world, alpha, realTime);
+  director.update(dt, robots.state, world, alpha);
+
+  sun.target.position.copy(controls.target);
+  sun.position.copy(controls.target).add(SUN_OFFSET);
   renderer.render(scene, camera);
 
   frames++;
@@ -165,4 +202,4 @@ director.go('overview', true);
 requestAnimationFrame(frame);
 
 // Handy for debugging in the browser console.
-window.warehouse = { sim, camera, renderer, director, ui };
+window.warehouse = { world, sim, camera, renderer, director, ui };

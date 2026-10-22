@@ -97,13 +97,27 @@ export class BoxViews {
       });
     }
 
-    // Shipped boxes riding the conveyor out.
+    // Shipped boxes riding the short conveyor into the truck.
     const now = sim.time + alpha * 0.3;
     for (const s of sim.shippedBoxes) {
-      const travel = (now - s.time) * 1.6;
-      if (travel > 8.5) continue;
+      const travel = (now - s.time) * 1.2;
+      if (travel > 1.2) continue;
       put(s.box, C.cellX(s.cell), 0.56, C.cellZ(s.cell) + CS * 0.6 + travel);
     }
+    // Boxes waiting at a lane because its truck is not there yet: stacked by the wall.
+    sim.lanes.forEach((lane) => {
+      const ship = sim.layout.ships[lane.id];
+      let k = 0;
+      for (const box of lane.buffer) {
+        if (handled.has(box.id)) continue;
+        const col = k % 2;
+        const layer = Math.floor(k / 4);
+        const row = Math.floor(k / 2) % 2;
+        put(box, C.cellX(ship.cells[col]), 0.56 + layer * 0.75, C.backZ - 0.5 - row * 0.9);
+        k++;
+        if (k >= 16) break;
+      }
+    });
 
     this.count = n;
     this.mesh.count = n;

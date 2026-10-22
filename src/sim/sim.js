@@ -13,6 +13,10 @@ export const DEFAULT_SETTINGS = {
   ordersPerMinute: 6,
   targetFill: 0.8, // purchasing aims to keep the warehouse about this full
   seed: 7,
+  // In the supply chain the world sends trucks and store orders, so the
+  // warehouse does not make up its own.
+  chain: false,
+  lanes: 2,
 };
 
 const PRODUCT_NAMES = [
@@ -35,7 +39,7 @@ export class Sim {
   reset(settings = {}) {
     this.settings = { ...DEFAULT_SETTINGS, ...settings };
     const rng = (this.rng = makeRng(this.settings.seed));
-    const L = (this.layout = buildLayout());
+    const L = (this.layout = buildLayout({ lanes: this.settings.lanes }));
     this.planner = new Planner(L);
     this.tick = 0;
     this.slots = L.slots;
@@ -71,6 +75,8 @@ export class Sim {
     this.claims = new Map(); // cell -> robot id (a robot will stand there for its task)
     this.events = [];
     this.shippedBoxes = []; // recently shipped, for the conveyor animation
+    // Boxes waiting at each shipping lane for the truck to the store.
+    this.lanes = L.ships.map((s) => ({ id: s.id, buffer: [] }));
     this.stats = {
       boxesIn: 0, boxesOut: 0, ordersOnTime: 0, ordersLate: 0,
       trucksDone: 0, trucksLate: 0, dwellSum: 0, dwellCount: 0,
@@ -108,9 +114,11 @@ export class Sim {
   step() {
     this.tick++;
     const now = this.time;
-    this.planTrucks(now);
+    if (!this.settings.chain) {
+      this.planTrucks(now);
+      this.makeOrders(now);
+    }
     this.updateTrucks(now);
-    this.makeOrders(now);
     this.moveRobots();
     this.dispatch();
     this.planRoutes();
@@ -250,11 +258,43 @@ export class Sim {
       }
       if (t.status === 'leaving' && now - t.statusSince >= TRUCK_MOVE_SECONDS) {
         t.status = 'gone';
+        t.statusSince = now;
         d.truck = null;
         this.stats.trucksDone++;
+        this.onTruckGone?.(t);
       }
     }
     if (this.trucks.length > 60) this.trucks = this.trucks.filter((t) => t.status !== 'gone' || now - t.statusSince < 120);
+  }
+
+  // A truck from a factory reached the warehouse gate (supply chain mode).
+  receiveTruck({ name, load, planned, color, from }) {
+    const now = this.time;
+    const truck = {
+      id: this.nextTruckId++, name, planned, arrival: now, load, unloaded: 0,
+      status: 'planned', dock: null, statusSince: now, color, from,
+    };
+    this.trucks.push(truck);
+    return truck;
+  }
+
+  // A store asks for boxes (supply chain mode). Returns the order.
+  addOrder(store, products, dueIn) {
+    const now = this.time;
+    const order = {
+      id: this.nextOrderId++, created: now, due: now + dueIn, lines: [], status: 'open', ship: store,
+    };
+    order.name = `#${1000 + order.id}`;
+    for (const product of products) {
+      const line = { product, box: null, state: 'backorder' };
+      order.lines.push(line);
+      this.reserveForLine(order, line);
+    }
+    this.orders.push(order);
+    const missing = order.lines.filter((l) => l.state === 'backorder').length;
+    if (missing) this.log(`Order ${order.name}: ${missing} item(s) not in stock, waiting for a truck.`, 'warn');
+    if (this.orders.length > 400) this.orders = this.orders.filter((o) => o.status === 'open' || now - o.closed < 300);
+    return order;
   }
 
   makeBox(product, truck) {
@@ -418,6 +458,7 @@ export class Sim {
       this.stats.boxesOut++;
       this.shippedBoxes.push({ box, cell: r.cell, time: now });
       const order = this.orders.find((o) => o.id === box.order);
+      if (this.settings.chain) this.lanes[order.ship].buffer.push(box);
       const line = order.lines.find((l) => l.box === box.id);
       line.state = 'shipped';
       if (order.lines.every((l) => l.state === 'shipped')) {

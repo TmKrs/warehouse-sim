@@ -56,7 +56,7 @@ button.small { padding: 2px 8px; font-size: 12px; }
   position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
   display: flex; gap: 6px; padding: 6px;
 }
-#views button { white-space: nowrap; }
+#views button { white-space: nowrap; font-size: 13px; padding: 5px 9px; }
 
 #panel {
   position: fixed; top: 12px; right: 12px; bottom: 12px;

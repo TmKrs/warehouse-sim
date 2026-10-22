@@ -92,7 +92,7 @@ export function buildBuilding(scene, L, C) {
 
   // Outdoor ground and truck yard.
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(400, 400),
+    new THREE.PlaneGeometry(2400, 2400),
     new THREE.MeshStandardMaterial({ color: 0x6f7a62, roughness: 1 }),
   );
   ground.rotation.x = -Math.PI / 2;
@@ -252,15 +252,15 @@ export function buildBuilding(scene, L, C) {
     group.add(plate);
   }
 
-  // Shipping conveyors running out through the back wall.
+  // Short conveyors through the back wall, straight into the truck for each store.
   const beltMat = new THREE.MeshStandardMaterial({ color: 0x23272e, roughness: 0.8 });
   const railMat = new THREE.MeshStandardMaterial({ color: 0x9aa3ad, metalness: 0.6, roughness: 0.35 });
   const legMat = new THREE.MeshStandardMaterial({ color: 0x55606c, metalness: 0.4 });
   for (const s of L.ships) {
     for (const c of s.cells) {
       const x = C.cellX(c);
-      const len = 9;
-      const z0 = C.cellZ(c) + CS * 0.35;
+      const z0 = C.cellZ(c) + CS * 0.3;
+      const len = C.backZ + 0.35 - z0;
       const belt = shadowy(new THREE.Mesh(new THREE.BoxGeometry(CS * 0.8, 0.12, len), beltMat));
       belt.position.set(x, 0.5, z0 + len / 2);
       group.add(belt);
@@ -269,19 +269,10 @@ export function buildBuilding(scene, L, C) {
         rail.position.set(x + side * CS * 0.42, 0.6, z0 + len / 2);
         group.add(rail);
       }
-      for (let k = 0; k < 4; k++) {
-        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.45, 0.08), legMat);
-        leg.position.set(x, 0.22, z0 + 0.5 + k * (len / 4));
-        group.add(leg);
-      }
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.45, 0.08), legMat);
+      leg.position.set(x, 0.22, z0 + len / 2);
+      group.add(leg);
     }
-    // A shipping container at the end of each station.
-    const box = shadowy(new THREE.Mesh(
-      new THREE.BoxGeometry(CS * 3.6, 2.6, 2.4),
-      new THREE.MeshStandardMaterial({ color: s.id === 0 ? 0x1f6f8b : 0x8b3a2f, roughness: 0.7, metalness: 0.3 }),
-    ));
-    box.position.set(C.x(s.x), 1.3, C.backZ + 10.5);
-    group.add(box);
   }
 
   // Charging pads at the parking spots.

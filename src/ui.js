@@ -1,23 +1,29 @@
 // Everything on screen that is not 3D: top bar, side panel, info card, settings.
 import { SIZES } from './sim/sim.js';
+import { CLOCK_SPEED, START_HOUR } from './sim/world.js';
 
 const $ = (id) => document.getElementById(id);
-const START_HOUR = 6;
 
-export function clockText(seconds) {
-  const s = Math.floor(seconds) + START_HOUR * 3600;
+// Wall clock text for a warehouse time in seconds (the clock runs 30x faster).
+export function clockText(simSeconds) {
+  const s = Math.floor(START_HOUR * 3600 + simSeconds * CLOCK_SPEED);
   const hh = String(Math.floor(s / 3600) % 24).padStart(2, '0');
   const mm = String(Math.floor(s / 60) % 60).padStart(2, '0');
-  const ss = String(s % 60).padStart(2, '0');
-  return `${hh}:${mm}:${ss}`;
+  return `${hh}:${mm}`;
 }
-const hm = (seconds) => clockText(seconds).slice(0, 5);
-const minutes = (s) => (s < 60 ? `${Math.round(s)} s` : `${(s / 60).toFixed(1)} min`);
+const hm = clockText;
+const dayText = (simSeconds) => `Day ${1 + Math.floor((START_HOUR * 3600 + simSeconds * CLOCK_SPEED) / 86400)} · ${clockText(simSeconds)}`;
+// A stretch of warehouse time as wall-clock time ("2 h 15 min").
+const minutes = (simSeconds) => {
+  const m = Math.round((simSeconds * CLOCK_SPEED) / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
+};
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 export class Ui {
-  constructor(sim, handlers) {
-    this.sim = sim;
+  constructor(world, handlers) {
+    this.world = world;
+    this.sim = world.sim;
     this.h = handlers;
     this.speed = 1;
     this.paused = false;
@@ -53,6 +59,10 @@ export class Ui {
 
     this.setupSettings();
     this.buildRows();
+    $('arrivals').addEventListener('click', (e) => {
+      const row = e.target.closest('tr[data-truck]');
+      if (row) this.select({ type: 'truck', id: Number(row.dataset.truck) });
+    });
   }
 
   togglePause() {
@@ -73,6 +83,7 @@ export class Ui {
   // ---------- settings (no code needed) ----------
   setupSettings() {
     const sim = this.sim;
+    const world = this.world;
     const dlg = $('settings');
     const bind = (input, out, get, set, fmt) => {
       const el = $(input);
@@ -81,10 +92,11 @@ export class Ui {
       this.refreshers.push(() => { el.value = get(); show(); });
     };
     this.refreshers = [];
-    bind('setRobots', 'robotsOut', () => sim.settings.robots, () => {}, (v) => v);
-    bind('setTruck', 'truckOut', () => sim.settings.truckEverySeconds, (v) => { sim.settings.truckEverySeconds = v; }, (v) => `${v} s`);
-    bind('setOrders', 'ordersOut', () => sim.settings.ordersPerMinute, (v) => { sim.settings.ordersPerMinute = v; }, (v) => v);
-    bind('setFill', 'fillOut', () => Math.round(sim.settings.targetFill * 100), (v) => { sim.settings.targetFill = v / 100; }, (v) => `${v}%`);
+    bind('setRobots', 'robotsOut', () => world.settings.robots, () => {}, (v) => v);
+    bind('setFactories', 'factoriesOut', () => world.settings.factories, () => {}, (v) => v);
+    bind('setStores', 'storesOut', () => world.settings.stores, () => {}, (v) => v);
+    bind('setCustomers', 'customersOut', () => world.settings.customersPerHour, (v) => { world.settings.customersPerHour = v; }, (v) => v);
+    bind('setFill', 'fillOut', () => Math.round(world.settings.targetFill * 100), (v) => { world.settings.targetFill = v / 100; }, (v) => `${v}%`);
     $('settingsBtn').addEventListener('click', () => {
       for (const r of this.refreshers) r();
       dlg.showModal();
@@ -92,10 +104,11 @@ export class Ui {
     $('setTheme').addEventListener('change', (e) => this.h.onTheme(e.target.value));
     $('setShadows').addEventListener('change', (e) => this.h.onShadows(e.target.value === 'on'));
     $('restart').addEventListener('click', () => {
-      const robots = Number($('setRobots').value);
-      this.h.onRestart({ ...sim.settings, robots });
-      this.buildRows();
-      dlg.close();
+      this.h.onRestart({
+        robots: Number($('setRobots').value),
+        factories: Number($('setFactories').value),
+        stores: Number($('setStores').value),
+      });
     });
   }
 
@@ -122,8 +135,11 @@ export class Ui {
     // Buttons are drawn once per selection so clicks are never lost on a refresh.
     box.innerHTML = '<div id="infoBody"></div><div class="actions" id="infoActions"></div>';
     this.lastInfo = null;
-    $('infoActions').innerHTML = (sel.type === 'robot' ? '<button id="rideBtn" class="primary">Ride along</button>' : '') + '<button id="closeInfo">Close</button>';
+    const extra = sel.type === 'robot' ? '<button id="rideBtn" class="primary">Ride along</button>'
+      : sel.type === 'truck' ? '<button id="followBtn" class="primary">Follow</button>' : '';
+    $('infoActions').innerHTML = `${extra}<button id="closeInfo">Close</button>`;
     if (sel.type === 'robot') $('rideBtn').onclick = () => { this.setView('ride'); this.h.onView('ride'); };
+    if (sel.type === 'truck') $('followBtn').onclick = () => { this.setView(''); this.h.onFollow(sel.id); };
     $('closeInfo').onclick = () => this.select(null);
     this.renderInfo();
   }
@@ -144,6 +160,22 @@ export class Ui {
           <dt>Status</dt><dd>${esc(this.robotStatus(r))}</dd>
           <dt>Jobs done</dt><dd>${r.tasksDone}</dd>
         </dl>`;
+    } else if (sel.type === 'truck') {
+      const t = this.world.trucks.find((x) => x.id === sel.id);
+      if (!t) {
+        html = '<h3>🚚 Truck parked</h3><p class="muted">This truck finished its trip.</p>';
+      } else {
+        const counts = new Map();
+        for (const p of t.cargo) counts.set(p, (counts.get(p) || 0) + 1);
+        const what = [...counts].map(([p, n]) => `${n} × ${sim.products[p].name}`).join(', ') || 'Empty';
+        html = `
+          <h3>🚚 Truck ${esc(t.name)}</h3>
+          <dl>
+            <dt>Route</dt><dd>${esc(t.label)}</dd>
+            <dt>Cargo</dt><dd>${esc(what)}</dd>
+            <dt>Speed</dt><dd>${Math.round(t.speed * 3.6)} km/h</dd>
+          </dl>`;
+      }
     } else {
       const b = sim.boxes.get(sel.id);
       if (!b) {
@@ -162,7 +194,7 @@ export class Ui {
             <dt>Where</dt><dd>${esc(where)}</dd>
             <dt>Came on</dt><dd>${esc(b.truck)} at ${hm(b.arrivedAt)}</dd>
             ${b.storedAt !== null ? `<dt>On shelf</dt><dd>${minutes(sim.time - b.storedAt)}</dd>` : ''}
-            <dt>Order</dt><dd>${order ? `${esc(order.name)}, due ${hm(order.due)}` : 'Free stock'}</dd>
+            <dt>Order</dt><dd>${order ? `${esc(order.name)} for ${esc(order.store ?? 'a store')}, due ${hm(order.due)}` : 'Free stock'}</dd>
           </dl>`;
       }
     }
@@ -184,7 +216,7 @@ export class Ui {
     const order = sim.orders.find((o) => o.id === t.order);
     return t.i === 0
       ? `Picking ${name} for order ${order?.name ?? ''}`
-      : `Bringing ${name} to shipping ${(order?.ship ?? 0) + 1}`;
+      : `Bringing ${name} to the truck for ${order?.store ?? `lane ${(order?.ship ?? 0) + 1}`}`;
   }
 
   robotStatus(r) {
@@ -196,7 +228,7 @@ export class Ui {
 
   // ---------- side panel ----------
   update(realTime) {
-    $('clock').textContent = clockText(this.sim.time);
+    $('clock').textContent = dayText(this.sim.time);
     if (realTime - this.lastUpdate < 0.25) return;
     this.lastUpdate = realTime;
     const sim = this.sim;
@@ -236,30 +268,28 @@ export class Ui {
     set('waitPct', moved ? `${((100 * s.waitTicks) / moved).toFixed(1)}%` : '0%');
     set('dwell', s.dwellCount ? minutes(s.avgDwell) : '–');
 
-    // Arrivals board, like at an airport.
-    const now = sim.time;
-    const rows = sim.arrivals().map((t) => {
-      let status;
-      let c = '';
-      if (t.status === 'planned') {
-        const delay = t.arrival - t.planned;
-        // The carrier announces a delay shortly before the planned time.
-        if (delay > 60 && now > t.planned - 45) {
-          status = `Delayed ~${Math.round(delay / 60)} min`;
-          c = 'warn';
-        } else {
-          status = 'On the way';
-        }
-      } else if (t.status === 'yard') {
-        status = 'Waiting for dock';
-        c = 'warn';
-      } else if (t.status === 'docking') status = `Docking at ${t.dock + 1}`;
-      else if (t.status === 'unloading') status = `Unloading ${t.unloaded}/${t.load.length}`;
-      else status = 'Leaving';
-      if (t.late && t.status !== 'planned') c = c || 'warn';
-      return `<tr><td>${esc(t.name)}</td><td>${hm(t.planned)}</td><td>${t.load.length}</td><td class="${c}">${status}</td></tr>`;
-    });
-    $('arrivals').querySelector('tbody').innerHTML = rows.join('') || '<tr><td colspan="4" class="muted">No trucks planned</td></tr>';
+    // Supply chain at a glance.
+    const w = this.world.summary();
+    set('chainFactory', w.factoryStock);
+    set('chainRoad', w.onRoad);
+    set('chainWarehouse', s.stored);
+    set('chainStores', w.storeStock);
+    set('chainSold', w.sold, 'good');
+    const lostPct = w.sold + w.lost ? (100 * w.lost) / (w.sold + w.lost) : 0;
+    set('chainLost', `${lostPct.toFixed(1)}%`, lostPct > 5 ? 'bad' : lostPct > 2 ? 'warn' : '');
+
+    // Trucks on the road, like a departures board.
+    const rows = this.world.trucks
+      .filter((t) => t.state === 'drive' || t.cargo.length)
+      .slice(0, 8)
+      .map((t) => `<tr data-truck="${t.id}"><td>${esc(t.name)}</td><td>${esc(t.label)}</td><td>${t.cargo.length}</td></tr>`);
+    const yard = sim.trucks.filter((t) => t.status !== 'gone' && t.status !== 'planned');
+    for (const t of yard) {
+      const st = t.status === 'yard' ? '<span class="warn">waiting for a dock</span>' : t.status === 'unloading' ? `unloading ${t.unloaded}/${t.load.length}` : t.status;
+      rows.push(`<tr><td>${esc(t.name)}</td><td>At warehouse: ${st}</td><td>${t.load.length - t.unloaded}</td></tr>`);
+    }
+    $('arrivals').querySelector('tbody').innerHTML = rows.join('') || '<tr><td colspan="3" class="muted">No trucks driving</td></tr>';
+    $('truckCount').textContent = `${w.trucks} trucks`;
 
     if (sim.events.length !== this.lastLogCount || sim.events.at(-1)?.time !== this.lastLogTime) {
       this.lastLogCount = sim.events.length;

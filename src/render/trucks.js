@@ -4,7 +4,7 @@ import { clamp01, ease } from './coords.js';
 
 const TRAILER_LEN = 8.5;
 
-function makeTruck(color) {
+export function makeTruck(color) {
   const g = new THREE.Group();
   const trailerMat = new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.2 });
   const cabMat = new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.4, metalness: 0.3 });
@@ -109,7 +109,7 @@ export class TruckViews {
           } else {
             const q = ease((p - 0.5) / 0.5);
             rot = -Math.PI / 2 * Math.min(1, q * 3);
-            x = dockX + q * 50;
+            x = dockX + q * (C.rightX + 30 - dockX);
             z = dockZ - 12 - Math.min(1, q * 3) * 4;
           }
         }
