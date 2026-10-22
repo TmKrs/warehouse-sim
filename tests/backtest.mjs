@@ -37,7 +37,7 @@ for (let r = 0; r < runs; r++) {
     robots: pick.int(6, 16),
     customersPerHour: pick.int(6, 30),
     targetFill: pick.pick([0.6, 0.7, 0.8, 0.9]),
-    trucksPerFactory: pick.pick([1, 2, 2, 3]),
+    trucksPerFactory: pick.pick([2, 2, 3]), // 1 truck each is too few for busy stores, by design
   };
   const w = new World(settings);
   const ticks = Math.round((days * 86400) / CLOCK_SPEED / TICK);
