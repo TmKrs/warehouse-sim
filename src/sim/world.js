@@ -626,8 +626,11 @@ export class World {
       const p = t.path[k];
       if (p.rev || p.dock) {
         // Backing into a dock inside the zone: only once the last truck has pulled out.
-        const dock = t.path.find((q, j) => j >= k && q.dock) ?? p;
-        return !this.trucks.some((o) => o !== t && Math.hypot(o.x - dock.x, o.z - dock.z) < 8);
+        // Nobody may stand on the straight stretch from the turning point into the dock.
+        const j = t.path.findIndex((q, n) => n >= k && q.dock);
+        const dock = t.path[j] ?? p;
+        const from = t.path[j - 1] ?? { x, z };
+        return !this.trucks.some((o) => o !== t && distToSegment(o.x, o.z, from, dock) < 2);
       }
       const len = Math.hypot(p.x - x, p.z - z);
       const ux = (p.x - x) / (len || 1);
@@ -731,6 +734,14 @@ function project(corners, nx, nz) {
     hi = Math.max(hi, d);
   }
   return [lo, hi];
+}
+
+function distToSegment(px, pz, a, b) {
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const len2 = dx * dx + dz * dz || 1;
+  const k = Math.max(0, Math.min(1, ((px - a.x) * dx + (pz - a.z) * dz) / len2));
+  return Math.hypot(px - (a.x + dx * k), pz - (a.z + dz * k));
 }
 
 function pathLength(t, path) {
