@@ -8,7 +8,7 @@ Built in week 2 of "a new AI project every week".
 
 - **3 to 8 factories** (setting) each make a few of the 12 products on two production lines. Zoom in and the roof opens: workers run the machines and forklifts carry pallets from the lines to the racks and out to the waiting truck.
 - **The warehouse orders from the factories** when stock runs low, in full truck loads, and never more than fits.
-- **3 to 8 stores** (setting) sell to customers from 8:00 to 20:00, busiest at lunch and after work, and order from the warehouse when shelves run low.
+- **3 to 8 stores** (setting) sell to customers from 8:00 to 20:00, busiest at lunch and after work, and order from the warehouse when shelves run low. Zoom in and the roof opens: customers walk in from the car park, take boxes from the shelves, queue at the tills and leave, while staff restock the shelves from the back room.
 - **A new map on every start**: factories and stores sit at random spots around a ring road, facing it from any side. Add `?seed=123` to the address to get the same map again.
 - **Trucks** drive on the right, keep their distance, take turns at crossings, corners and docks (one truck at a time, and only when there is room on the far side), back up to docks, and only leave when there is a reason: a full load, or a store waiting too long. They never drive through each other.
 - **The day clock** runs 30 times faster than the robots: one real minute is half an hour.
@@ -37,7 +37,7 @@ All of this is in `src/sim/` and has no 3D code, so it can be tested on its own.
 
 ## Tests
 
-- `npm test`: the warehouse, the supply chain (3 days on four maps, fails if two trucks ever touch), every random map's roads, and the factory floors.
+- `npm test`: the warehouse, the supply chain (3 days on four maps, fails if two trucks ever touch), every random map's roads, the factory floors and the stores.
 - `npm run backtest`: a longer check on many random maps and settings, 5 simulated days each.
 
 ## Run it on your computer
