@@ -116,19 +116,38 @@ export class Region {
     apron.position.set(0, 0.01, face + 9);
     apron.receiveShadow = true;
     g.add(apron);
-    const hall = shadowy(new THREE.Mesh(new THREE.BoxGeometry(W, H, D), wall));
-    hall.position.set(0, H / 2, cz);
-    g.add(hall);
+    // The hall is built from walls and a roof, so close up the roof and the
+    // front wall can be hidden to look inside (see openFactory).
+    const T = 0.3;
+    const part = (w, h, d, x, y, z, material = wall) => {
+      const m = shadowy(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material));
+      m.position.set(x, y, z);
+      g.add(m);
+      return m;
+    };
+    part(W, H, T, 0, H / 2, cz - D / 2 + T / 2); // back
+    part(T, H, D, -W / 2 + T / 2, H / 2, cz);
+    part(T, H, D, W / 2 - T / 2, H / 2, cz);
+    const closed = [part(W, H, T, 0, H / 2, face - T / 2), part(W, T, D, 0, H - T / 2, cz)]; // front wall, roof
+    // A low front wall with openings at the dock doors, shown when open.
+    const open = [];
+    const cuts = [-W / 2, ...f.docks.flatMap((d) => [d.u - 2, d.u + 2]), W / 2];
+    for (let k = 0; k < cuts.length; k += 2) {
+      const m = part(cuts[k + 1] - cuts[k], 1.1, T, (cuts[k] + cuts[k + 1]) / 2, 0.55, face - T / 2);
+      m.visible = false;
+      open.push(m);
+    }
     // Saw-tooth roof.
     for (let k = 0; k < 5; k++) {
       const tooth = shadowy(new THREE.Mesh(new THREE.BoxGeometry(W / 5 - 0.4, 2.4, D), darker));
       tooth.position.set(-W / 2 + (k + 0.5) * (W / 5), H + 1.0, cz);
       tooth.rotation.z = 0.35;
       g.add(tooth);
+      closed.push(tooth);
     }
-    // Chimney with a band.
+    // Chimney with a band, just behind the hall.
     const chimney = shadowy(new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.5, 22, 18), mat(0xb45309)));
-    chimney.position.set(W / 2 - 4, 11, cz - D / 2 + 4);
+    chimney.position.set(W / 2 - 4, 11, cz - D / 2 - 2);
     g.add(chimney);
     const band = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.25, 1.4, 18), mat(0xf5f5f4));
     band.position.set(chimney.position.x, 19, chimney.position.z);
@@ -137,6 +156,7 @@ export class Region {
     const stripe = new THREE.Mesh(new THREE.BoxGeometry(W + 0.1, 0.8, D + 0.1), accent);
     stripe.position.set(0, H - 0.8, cz);
     g.add(stripe);
+    closed.push(stripe);
     for (const d of f.docks) {
       const door = new THREE.Mesh(new THREE.BoxGeometry(3.4, 3.8, 0.2), mat(0x64748b, { metalness: 0.4 }));
       door.position.set(d.u, 2.2, face + 0.05);
@@ -144,6 +164,7 @@ export class Region {
       const frame = new THREE.Mesh(new THREE.BoxGeometry(3.9, 0.3, 0.3), mat(0xf2b705));
       frame.position.set(d.u, 4.2, face + 0.1);
       g.add(frame);
+      closed.push(door, frame);
     }
     // Garage where the factory's trucks wait.
     const garage = shadowy(new THREE.Mesh(new THREE.BoxGeometry(12, 5, 9), mat(0xa8a29e)));
@@ -157,7 +178,17 @@ export class Region {
     const sign = canvasPanel(26, 5.2, 50);
     sign.mesh.position.set(-6, 6.6, face + 0.12);
     g.add(sign.mesh);
-    return { sign, f, products: world.sim.products };
+    closed.push(sign.mesh);
+    return { sign, f, products: world.sim.products, closed, open, isOpen: false };
+  }
+
+  // Close up, a factory loses its roof and front wall so you can look inside.
+  openFactory(i, isOpen) {
+    const fs = this.factorySigns[i];
+    if (!fs || fs.isOpen === isOpen) return;
+    fs.isOpen = isOpen;
+    for (const m of fs.closed) m.visible = !isOpen;
+    for (const m of fs.open) m.visible = isOpen;
   }
 
   buildStore(s) {

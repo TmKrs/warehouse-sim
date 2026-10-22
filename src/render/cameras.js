@@ -27,7 +27,11 @@ export class CameraDirector {
         const t = s.toWorld(0, s.faceV + s.depth / 2 - 4);
         return { pos: [p.x, up, p.z], target: [t.x, 2, t.z] };
       };
-      this.presets.factories = siteView(map.factories[0], 55, 38);
+      // The factory view looks over the low front wall into the open hall.
+      const f0 = map.factories[0];
+      const fp = f0.toWorld(14, f0.faceV - 24);
+      const ft = f0.toWorld(10, f0.faceV + 12);
+      this.presets.factories = { pos: [fp.x, 32, fp.z], target: [ft.x, 0, ft.z] };
       this.presets.stores = siteView(map.stores[0], 48, 34);
     }
     this.tween = null;
