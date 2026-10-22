@@ -22,7 +22,7 @@ export function buildMap(C, factoryCount, storeCount, rng) {
   // The ring starts small and grows until every site finds a free spot.
   const total = factoryCount + storeCount;
   for (let grow = 0; ; grow += 10) {
-    const map = tryBuild(C, factoryCount, storeCount, rng, 95 + grow, 80 + grow);
+    const map = tryBuild(C, factoryCount, storeCount, rng, 125 + grow, 110 + grow);
     if (map) return map;
   }
 }
@@ -40,7 +40,7 @@ function tryBuild(C, factoryCount, storeCount, rng, RX, RZ) {
   // along the side, `V` points away from the warehouse, `U` along the road.
   const sides = [
     { name: 'north', V: [0, -1], start: [-RX, -RZ], len: 2 * RX, keepOut: [yardIn.x - 15, yardOut.x + 15] },
-    { name: 'east', V: [1, 0], start: [RX, -RZ], len: 2 * RZ, keepOut: [] },
+    { name: 'east', V: [1, 0], start: [RX, -RZ], len: 2 * RZ, keepOut: [RZ] },
     { name: 'south', V: [0, 1], start: [RX, RZ], len: 2 * RX, keepOut: [westLinkX, eastLinkX, RX] },
     { name: 'west', V: [-1, 0], start: [-RX, RZ], len: 2 * RZ, keepOut: [] },
   ];
@@ -51,7 +51,8 @@ function tryBuild(C, factoryCount, storeCount, rng, RX, RZ) {
     s.tOf = (x, z) => (s.U[0] !== 0 ? (x - s.start[0]) / s.U[0] : (z - s.start[1]) / s.U[1]);
     s.taken = s.keepOut.map((v) => {
       const t = s.U[0] !== 0 ? s.tOf(v, 0) : s.tOf(0, v);
-      return [t - 14, t + 14];
+      // Wide enough that every crossing on the ring is at least 50 m from the next.
+      return [t - 38, t + 38];
     });
   }
 
@@ -66,8 +67,8 @@ function tryBuild(C, factoryCount, storeCount, rng, RX, RZ) {
     let spot = null;
     for (let attempt = 0; attempt < 400 && !spot; attempt++) {
       const side = sides[Math.floor(rng.next() * 4)];
-      // Keep the whole footprint (and the garage) on this side, clear of the corners.
-      const t = 12 - SITE_LEFT + rng.next() * (side.len - 24 - (SITE_RIGHT + 8 - SITE_LEFT));
+      // Keep the site's road crossings at least 50 m from the corners.
+      const t = 75 + rng.next() * (side.len - 150);
       const lo = t + SITE_LEFT - 8;
       const hi = t + SITE_RIGHT + 8;
       if (side.taken.some(([a, b]) => hi > a && lo < b)) continue;
@@ -164,6 +165,14 @@ function tryBuild(C, factoryCount, storeCount, rng, RX, RZ) {
   const eastLink = node(eastLinkX, RZ);
   const depotNode = node(RX, RZ);
   const depot = { x: RX + 22, z: RZ + 16 };
+  // The depot road has a lane each way: out on one side, back on the other.
+  const depotDir = (() => {
+    const dx = RX - depot.x;
+    const dz = RZ - depot.z;
+    const len = Math.hypot(dx, dz);
+    return { x: dx / len, z: dz / len };
+  })();
+  const depotLane = (p, sign) => ({ x: p.x - depotDir.z * LANE * sign, z: p.z + depotDir.x * LANE * sign });
   void sideNodes;
 
   // Shortest route between two graph nodes (Dijkstra).
@@ -247,7 +256,8 @@ function tryBuild(C, factoryCount, storeCount, rng, RX, RZ) {
 
   const paths = {
     garageStart(f) {
-      const p = f.toWorld(f.garageU - 6, f.serviceV);
+      // Out of the garage on the right-hand lane (right of +u is -v).
+      const p = f.toWorld(f.garageU - 6, f.serviceV - LANE);
       return { x: p.x, z: p.z, heading: Math.atan2(f.U[1], f.U[0]) };
     },
     garageToDock(f, d) {
@@ -271,24 +281,30 @@ function tryBuild(C, factoryCount, storeCount, rng, RX, RZ) {
         ...drive(outJunction, f.westNode),
         site(f.toWorld(-ACCESS, 0)),
         site(f.toWorld(-ACCESS, f.serviceV)),
-        site(f.toWorld(f.garageU, f.serviceV), { end: true }),
+        site(f.toWorld(f.garageU + 8, f.serviceV + LANE)),
+        site(f.toWorld(f.garageU, f.serviceV + LANE), { end: true }),
       ];
     },
     depotStart() {
-      return { x: depot.x, z: depot.z, heading: Math.atan2(RZ - depot.z, RX - depot.x) };
+      const p = depotLane(depot, 1);
+      return { x: p.x, z: p.z, heading: Math.atan2(depotDir.z, depotDir.x) };
     },
     depotToLane(laneX) {
       return [
+        site(depotLane({ x: RX - depotDir.x * 10, z: RZ - depotDir.z * 10 }, 1)),
         site({ x: RX, z: RZ }),
         ...drive(depotNode, westLink),
         site({ x: westLinkX, z: backYardZ }),
-        site({ x: laneX + 13, z: backYardZ }),
+        // Swing out onto the apron so the truck backs in straight, clear of its neighbours.
+        site({ x: laneX + 8, z: backYardZ }),
+        site({ x: laneX, z: backYardZ + 12 }),
         site({ x: laneX, z: C.backZ + 0.3 + TRUCK_HALF }, { rev: true, dock: true }),
       ];
     },
     laneToStore(laneX, s) {
       return [
-        site({ x: laneX + 2, z: backYardZ }),
+        site({ x: laneX, z: backYardZ + 1 }), // straight out until clear of the neighbours, the lanes are tight
+        site({ x: laneX + 8, z: backYardZ }),
         site({ x: eastLinkX, z: backYardZ }),
         ...drive(eastLink, s.westNode),
         ...intoSite(s, s.dockU),
@@ -298,7 +314,9 @@ function tryBuild(C, factoryCount, storeCount, rng, RX, RZ) {
       return [
         ...outOfSite(s, s.dockU),
         ...drive(s.eastNode, depotNode),
-        site(depot, { end: true }),
+        site({ x: RX, z: RZ }),
+        site(depotLane({ x: RX - depotDir.x * 10, z: RZ - depotDir.z * 10 }, -1)),
+        site(depotLane(depot, -1), { end: true }),
       ];
     },
   };
@@ -320,11 +338,43 @@ function tryBuild(C, factoryCount, storeCount, rng, RX, RZ) {
   piece({ x: westLinkX, z: RZ }, { x: westLinkX, z: backYardZ }, 9);
   piece({ x: eastLinkX, z: RZ }, { x: eastLinkX, z: backYardZ }, 9);
   piece({ x: westLinkX, z: backYardZ }, { x: eastLinkX, z: backYardZ }, 9);
+  piece({ x: westLinkX + 4, z: backYardZ + 10 }, { x: eastLinkX - 4, z: backYardZ + 10 }, 8.9); // apron for turning
   piece({ x: RX, z: RZ }, depot, 9);
+
+  // Traffic zones: only one truck at a time may be inside a crossing, a site's
+  // dock area or the back yard, so trucks never meet head-on or cut each other off.
+  const zones = [];
+  // The corners count as crossings too, so trucks turning there never meet.
+  const corners = [node(-RX, -RZ), node(RX, -RZ), node(-RX, RZ)];
+  const crossings = [inJunction, outJunction, westLink, eastLink, depotNode, ...corners];
+  for (const s of [...factories, ...stores]) crossings.push(s.westNode, s.eastNode);
+  for (const id of new Set(crossings)) {
+    const n = nodes[id];
+    zones.push({ kind: 'crossing', x: n.x, z: n.z, contains: (x, z) => Math.hypot(x - n.x, z - n.z) < 13 });
+  }
+  for (const s of [...factories, ...stores]) {
+    const lo = s.serviceV - 6;
+    zones.push({
+      kind: 'site', x: s.toWorld(0, s.serviceV).x, z: s.toWorld(0, s.serviceV).z,
+      contains: (x, z) => {
+        const dx = x - s.origin.x;
+        const dz = z - s.origin.z;
+        const u = dx * s.U[0] + dz * s.U[1];
+        const v = dx * s.V[0] + dz * s.V[1];
+        return u > -ACCESS - 6 && u < ACCESS + 6 && v > lo && v < s.faceV;
+      },
+    });
+  }
+  const yardTop = C.backZ + 12;
+  zones.push({
+    kind: 'backyard', x: (westLinkX + eastLinkX) / 2, z: backYardZ,
+    contains: (x, z) => x > westLinkX - 6 && x < eastLinkX + 6 && z > yardTop && z < backYardZ + 20,
+  });
+  zones.forEach((zn, i) => { zn.id = i; });
 
   const reach = 45 + SERVICE + 16 + 24 + 30;
   return {
-    factories, stores, depot, roads, paths, yardExitCentre, ring: { RX, RZ },
+    factories, stores, depot, roads, paths, zones, yardExitCentre, ring: { RX, RZ },
     bounds: { minX: -RX - reach, maxX: RX + reach, minZ: -RZ - reach, maxZ: RZ + reach },
   };
 }

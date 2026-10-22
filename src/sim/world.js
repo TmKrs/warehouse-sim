@@ -85,6 +85,18 @@ export class World {
     }));
     this.lanes = this.sim.layout.ships.map((ship) => ({ id: ship.id, x: this.C.x(ship.x), truck: null }));
     this.trucks = [];
+    this.zones = this.map.zones.map(() => ({ holder: null, queue: [] }));
+    this.returns = []; // empty trucks waiting for room to leave the warehouse yard
+    // Factories send their first trucks one after another, not all at once.
+    const starts = this.factories.map(() => rng.range(10, 40 + 15 * this.factories.length)).sort((a, b) => a - b);
+    for (let i = 1; i < starts.length; i++) starts[i] = Math.max(starts[i], starts[i - 1] + 12);
+    const order = this.factories.map((f) => f.id);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(rng.next() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    order.forEach((id, i) => { this.factories[id].nextTruckAt = starts[i]; });
+    this.nextFactoryTruck = 0;
     this.nextTruckId = 1;
     this.nextPoId = 1;
     this.nextPurchase = 0;
@@ -123,8 +135,10 @@ export class World {
     this.produce();
     this.shop();
     this.purchase();
+    this.dispatchWaiting();
     this.storeOrders();
     this.manageLanes();
+    this.spawnReturns();
     this.moveTrucks();
   }
 
@@ -208,7 +222,6 @@ export class World {
         for (const p of items) pos[p]++;
         const po = { id: this.nextPoId++, items, status: 'waiting', created: this.time, truck: null };
         f.orders.push(po);
-        this.dispatchFactoryTruck(f, po);
       } else {
         room += items.length;
       }
@@ -324,22 +337,43 @@ export class World {
     t.departed = this.time;
   }
 
+  // Orders that have no truck yet get one, spaced out so trucks don't all leave at once.
+  dispatchWaiting() {
+    if (this.time < this.nextFactoryTruck) return;
+    for (const f of this.factories) {
+      if (this.time < f.nextTruckAt) continue;
+      const po = f.orders.find((o) => o.status === 'waiting' && !o.truck);
+      if (!po || !this.dispatchFactoryTruck(f, po)) continue;
+      f.nextTruckAt = this.time + 40;
+      this.nextFactoryTruck = this.time + 4;
+      return;
+    }
+  }
+
+  // Is there room for a truck at this spot? Used before a truck appears.
+  roomFor(p, heading) {
+    return !this.trucks.some((o) => overlap(p.x, p.z, heading, 0, 1, o.x, o.z, o.heading));
+  }
+
   dispatchFactoryTruck(f, po) {
     const d = f.docks.findIndex((dk) => !dk.truck);
-    if (d < 0) return;
+    if (d < 0) return false;
+    const start = this.map.paths.garageStart(f);
+    if (!this.roomFor(start, start.heading)) return false;
     const t = this.newTruck({ kind: 'in', factory: f.id, po: po.id, dock: d, label: `${f.name} → Warehouse` });
     f.docks[d].truck = t.id;
     po.truck = t.id;
     const path = this.map.paths.garageToDock(f, d);
-    const start = this.map.paths.garageStart(f);
     this.place(t, start, start.heading);
     this.go(t, path, 'toFactoryDock');
+    return true;
   }
 
   dispatchLaneTruck(lane) {
+    const start = this.map.paths.depotStart();
+    if (!this.roomFor(start, start.heading)) return;
     const t = this.newTruck({ kind: 'out', lane: lane.id, label: 'Depot → Warehouse' });
     lane.truck = t.id;
-    const start = this.map.paths.depotStart();
     this.place(t, start, start.heading);
     this.go(t, this.map.paths.depotToLane(lane.x), 'toLane');
   }
@@ -348,17 +382,27 @@ export class World {
   truckLeftWarehouse(simTruck) {
     const f = this.factories[simTruck.from];
     if (!f) return;
-    const t = this.newTruck({ kind: 'return', factory: f.id, label: `Warehouse → ${f.name} (empty)` });
-    t.color = simTruck.color;
-    this.place(t, this.map.yardExitCentre, 0);
-    this.go(t, this.map.paths.warehouseToGarage(f), 'home');
     const po = f.orders.find((o) => o.id === simTruck.po);
     if (po) po.status = 'delivered';
     f.orders = f.orders.filter((o) => o.status !== 'delivered');
+    this.returns.push({ f, color: simTruck.color });
+  }
+
+  // Empty trucks drive home from the warehouse yard one at a time, when there is room.
+  spawnReturns() {
+    if (!this.returns.length) return;
+    const p = this.map.yardExitCentre;
+    if (!this.roomFor(p, 0)) return;
+    const { f, color } = this.returns.shift();
+    const t = this.newTruck({ kind: 'return', factory: f.id, label: `Warehouse → ${f.name} (empty)` });
+    t.color = color;
+    this.place(t, p, 0);
+    this.go(t, this.map.paths.warehouseToGarage(f), 'home');
   }
 
   arrive(t) {
     const now = this.time;
+    t.speed = 0;
     if (t.phase === 'toFactoryDock') {
       t.state = 'docked';
       t.label = `Loading at ${this.factories[t.factory].name}`;
@@ -382,6 +426,7 @@ export class World {
 
   remove(t) {
     this.trucks = this.trucks.filter((x) => x !== t);
+    this.releaseZones(t, true);
   }
 
   // Loading at factories and unloading at stores.
@@ -408,9 +453,6 @@ export class World {
         t.eta = now + pathLength(t, path) / 9 + 8;
         t.label = `${f.name} → Warehouse`;
         this.stats.trips++;
-        // Another order may be waiting for a free dock.
-        const next = f.orders.find((o) => o.status === 'waiting' && !o.truck);
-        if (next) this.dispatchFactoryTruck(f, next);
       }
     }
     if (t.state === 'unloading' && now >= t.nextBox) {
@@ -431,87 +473,171 @@ export class World {
 
   moveTrucks() {
     const dt = TICK;
+    this.tick = (this.tick ?? 0) + 1;
     for (const t of this.trucks) {
       t.px = t.x;
       t.pz = t.z;
       t.pheading = t.heading;
       if (t.state !== 'drive') {
+        this.releaseZones(t);
         this.handleDocked(t);
         continue;
       }
-      const target = t.path[t.seg];
+      let target = t.path[t.seg];
       if (!target) {
         this.arrive(t);
         continue;
+      }
+      // Cut corners a little, like a real driver, so the cab doesn't poke into the other lane.
+      const after = t.path[t.seg + 1];
+      // Aim a few metres along the next stretch instead of at the corner itself.
+      const cut = target.site ? 2 : 6;
+      if (after && !target.rev && !after.rev && !target.dock && Math.hypot(target.x - t.x, target.z - t.z) < cut) {
+        const lx = after.x - target.x;
+        const lz = after.z - target.z;
+        const len = Math.hypot(lx, lz);
+        if (len <= cut) {
+          t.seg++;
+        } else {
+          t.path[t.seg] = { ...target, x: target.x + (lx / len) * cut, z: target.z + (lz / len) * cut };
+        }
+        target = t.path[t.seg];
       }
       const dx = target.x - t.x;
       const dz = target.z - t.z;
       const dist = Math.hypot(dx, dz);
       const rev = !!target.rev;
       const cruise = rev ? 2.5 : target.site ? 5 : 11;
-      let want = this.blocked(t) ? 0 : cruise;
-      // Slow down for the end of the route and for corners.
-      const next = t.path[t.seg + 1];
-      if (!next) want = Math.min(want, Math.max(1.5, dist * 0.8));
-      t.speed += Math.max(-6 * dt, Math.min(3 * dt, want - t.speed));
-      if (want === 0) t.speed = 0;
+      let want = cruise;
+      // Slow down for the end of the route.
+      if (!t.path[t.seg + 1]) want = Math.min(want, Math.max(1.5, dist * 0.8));
+      const speed = Math.max(0, t.speed + Math.max(-6 * dt, Math.min(3 * dt, want - t.speed)));
       // Turn the cab toward the way we drive (backwards when reversing).
       const dirAngle = Math.atan2(dz, dx);
       const face = rev ? dirAngle + Math.PI : dirAngle;
       let diff = face - t.heading;
       while (diff > Math.PI) diff -= 2 * Math.PI;
       while (diff < -Math.PI) diff += 2 * Math.PI;
-      const turnRate = Math.max(0.8, t.speed / 5);
-      t.heading += Math.max(-turnRate * dt, Math.min(turnRate * dt, diff));
-      const stepLen = t.speed * dt;
-      if (stepLen >= dist) {
-        t.x = target.x;
-        t.z = target.z;
+      const turnRate = Math.max(1.2, speed / 4);
+      const heading = t.heading + Math.max(-turnRate * dt, Math.min(turnRate * dt, diff));
+      const stepLen = Math.max(speed * dt, 0.3);
+      const arrived = stepLen >= dist;
+      const nx = arrived ? target.x : t.x + (dx / Math.max(dist, 1e-6)) * stepLen;
+      const nz = arrived ? target.z : t.z + (dz / Math.max(dist, 1e-6)) * stepLen;
+      // Only move if the road ahead is free and we may enter the zone we drive into.
+      if (!this.mayMove(t, nx, nz, heading, rev ? -1 : 1, speed, dirAngle)) {
+        t.speed = 0;
+        t.waited += dt;
+        continue;
+      }
+      t.speed = speed;
+      t.heading = heading;
+      t.x = nx;
+      t.z = nz;
+      t.waited = 0;
+      this.releaseZones(t);
+      if (arrived) {
         t.seg++;
         if (!t.path[t.seg]) this.arrive(t);
-      } else if (dist > 0) {
-        t.x += (dx / dist) * stepLen;
-        t.z += (dz / dist) * stepLen;
       }
-      t.waited = t.speed < 0.1 ? t.waited + dt : 0;
     }
   }
 
-  // Is another truck right in front of us in our lane?
-  blocked(t) {
-    const target = t.path[t.seg];
-    if (!target || target.rev || target.dock) return false;
-    if (t.waited > 8) return false; // never wait forever at a crossing
-    const fx = Math.cos(t.heading);
-    const fz = Math.sin(t.heading);
-    const frontX = t.x + fx * TRUCK_HALF;
-    const frontZ = t.z + fz * TRUCK_HALF;
+  // The three points along a truck: rear, centre and cab.
+  bodyPoints(x, z, heading) {
+    const fx = Math.cos(heading) * TRUCK_HALF;
+    const fz = Math.sin(heading) * TRUCK_HALF;
+    return [[x - fx, z - fz], [x, z], [x + fx, z + fz]];
+  }
+
+  mayMove(t, x, z, heading, dir, speed, motion) {
+    // 1. Crossings, dock areas and the back yard take one truck at a time, first come first served.
+    const gap = 1.5 + speed * 0.6;
+    // The end of the truck that leads (the rear when reversing), and a box ahead of it in the way we move.
+    const endX = x + Math.cos(heading) * dir * TRUCK_HALF;
+    const endZ = z + Math.sin(heading) * dir * TRUCK_HALF;
+    const lead = [endX + Math.cos(motion) * gap, endZ + Math.sin(motion) * gap];
+    const pts = [...this.bodyPoints(x, z, heading), lead];
+    for (const [i, zn] of this.map.zones.entries()) {
+      if (!pts.some(([px, pz]) => zn.contains(px, pz))) continue;
+      const st = this.zones[i];
+      if (st.holder === t.id) continue;
+      // Forget trucks that stopped asking (they took another road or left).
+      st.queue = st.queue.filter((q) => q.id === t.id || q.tick >= this.tick - 1);
+      const mine = st.queue.find((q) => q.id === t.id);
+      if (mine) mine.tick = this.tick;
+      else st.queue.push({ id: t.id, tick: this.tick });
+      if (st.holder !== null || st.queue[0].id !== t.id) {
+        t.why = `zone ${i}`;
+        return false;
+      }
+      // Don't block the crossing: only go in if there is room on the far side.
+      if (!this.roomAfter(t, zn)) {
+        t.why = `no room after zone ${i}`;
+        return false;
+      }
+      st.holder = t.id;
+      st.queue.shift();
+      (t.zones ??= new Set()).add(i);
+    }
+    // 2. Keep a gap to every other truck in the direction we drive.
     for (const o of this.trucks) {
-      if (o === t || o.state === 'docked' || o.state === 'unloading') continue;
-      const ox = Math.cos(o.heading) * TRUCK_HALF;
-      const oz = Math.sin(o.heading) * TRUCK_HALF;
-      for (const [px, pz] of [[o.x - ox, o.z - oz], [o.x, o.z], [o.x + ox, o.z + oz]]) {
-        const rx = px - frontX;
-        const rz = pz - frontZ;
-        const along = rx * fx + rz * fz;
-        const side = Math.abs(rx * fz - rz * fx);
-        if (along > -1 && along < 7 && side < 1.7) {
-          // Two trucks blocking each other: the older one goes first.
-          if (o.id > t.id && this.blocks(o, t)) continue;
-          return true;
+      if (o === t) continue;
+      // A truck queued for a zone we hold stays put, so only real contact counts.
+      const queued = t.zones?.size && [...t.zones].some((i) => this.zones[i].queue.some((q) => q.id === o.id));
+      const hitBody = overlap(x, z, heading, 0, 0, o.x, o.z, o.heading);
+      const hitAhead = !queued && overlapBox(endX + Math.cos(motion) * gap / 2, endZ + Math.sin(motion) * gap / 2, motion, gap / 2, o);
+      if (!hitBody && !hitAhead) continue;
+      // Already touching (rare, e.g. right after a hand-over): let them drive apart.
+      if (overlap(t.x, t.z, t.heading, 0, 0, o.x, o.z, o.heading)) continue;
+      t.why = `${o.name}${hitBody ? ' body' : ' ahead'}`;
+      return false;
+    }
+    return true;
+  }
+
+  // Is there space for the truck just past a zone, along its route?
+  roomAfter(t, zn) {
+    let x = t.x;
+    let z = t.z;
+    let inside = false;
+    let past = 0;
+    for (let k = t.seg; k < t.path.length; k++) {
+      const p = t.path[k];
+      if (p.rev || p.dock) return true; // backing into a dock inside the zone
+      const len = Math.hypot(p.x - x, p.z - z);
+      const ux = (p.x - x) / (len || 1);
+      const uz = (p.z - z) / (len || 1);
+      for (let d = 1; d <= len; d += 1) {
+        const px = x + ux * d;
+        const pz = z + uz * d;
+        if (zn.contains(px, pz)) inside = true;
+        else if (inside && ++past >= TRUCK_HALF + 1) {
+          const cx = px + ux * TRUCK_HALF;
+          const cz = pz + uz * TRUCK_HALF;
+          return !this.trucks.some((o) => o !== t && overlap(cx, cz, Math.atan2(uz, ux), 0, 0.5, o.x, o.z, o.heading));
         }
       }
+      x = p.x;
+      z = p.z;
     }
-    return false;
+    return true; // the route ends inside the zone
   }
 
-  blocks(a, b) {
-    const fx = Math.cos(a.heading);
-    const fz = Math.sin(a.heading);
-    const rx = b.x - (a.x + fx * TRUCK_HALF);
-    const rz = b.z - (a.z + fz * TRUCK_HALF);
-    const along = rx * fx + rz * fz;
-    return along > -TRUCK_HALF - 1 && along < 7 + TRUCK_HALF && Math.abs(rx * fz - rz * fx) < 1.7;
+  // Give back zones the truck has fully left (or all of them).
+  releaseZones(t, all = false) {
+    if (!t.zones?.size) {
+      if (all) for (const st of this.zones) st.queue = st.queue.filter((q) => q.id !== t.id);
+      return;
+    }
+    const pts = this.bodyPoints(t.x, t.z, t.heading);
+    const parked = t.state !== 'drive';
+    for (const i of [...t.zones]) {
+      if (!all && !parked && pts.some(([px, pz]) => this.map.zones[i].contains(px, pz))) continue;
+      this.zones[i].holder = null;
+      t.zones.delete(i);
+    }
+    if (all) for (const st of this.zones) st.queue = st.queue.filter((q) => q.id !== t.id);
   }
 
   // ---------- numbers for the panel ----------
@@ -528,6 +654,59 @@ export class World {
       trucks: this.trucks.length + this.sim.trucks.filter((t) => t.status !== 'gone' && t.status !== 'planned').length,
     };
   }
+}
+
+// Do two trucks overlap? Truck A can be stretched forward (or backward, with a
+// negative value) by `ext` metres and widened by `pad`. Uses the separating axis test.
+const HALF_W = 1.3;
+function overlap(ax, az, ah, ext, pad, bx, bz, bh) {
+  const a = rect(ax, az, ah, TRUCK_HALF + pad, HALF_W + pad, ext);
+  const b = rect(bx, bz, bh, TRUCK_HALF + 0.2, HALF_W, 0);
+  for (const r of [a, b]) {
+    for (const [nx, nz] of r.axes) {
+      const pa = project(a.corners, nx, nz);
+      const pb = project(b.corners, nx, nz);
+      if (pa[1] <= pb[0] || pb[1] <= pa[0]) return false;
+    }
+  }
+  return true;
+}
+
+// Does a box (centre, angle, half length, truck width) touch truck o?
+function overlapBox(x, z, h, halfL, o) {
+  const a = rect(x, z, h, halfL, HALF_W, 0);
+  const b = rect(o.x, o.z, o.heading, TRUCK_HALF + 0.2, HALF_W, 0);
+  for (const r of [a, b]) {
+    for (const [nx, nz] of r.axes) {
+      const pa = project(a.corners, nx, nz);
+      const pb = project(b.corners, nx, nz);
+      if (pa[1] <= pb[0] || pb[1] <= pa[0]) return false;
+    }
+  }
+  return true;
+}
+
+function rect(x, z, h, halfL, halfW, ext) {
+  const fx = Math.cos(h);
+  const fz = Math.sin(h);
+  const front = halfL + Math.max(0, ext);
+  const back = halfL + Math.max(0, -ext);
+  const corners = [[front, halfW], [front, -halfW], [-back, -halfW], [-back, halfW]].map(([l, w]) => [
+    x + fx * l - fz * w,
+    z + fz * l + fx * w,
+  ]);
+  return { corners, axes: [[fx, fz], [-fz, fx]] };
+}
+
+function project(corners, nx, nz) {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const [x, z] of corners) {
+    const d = x * nx + z * nz;
+    lo = Math.min(lo, d);
+    hi = Math.max(hi, d);
+  }
+  return [lo, hi];
 }
 
 function pathLength(t, path) {
