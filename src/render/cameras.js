@@ -17,14 +17,18 @@ export class CameraDirector {
     if (map) {
       const b = map.bounds;
       const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ);
-      // From the side: factories on the left, stores on the right, warehouse in the middle.
+      // From high up on the south side, looking across the whole ring.
       const midX = (b.minX + b.maxX) / 2;
       const midZ = (b.minZ + b.maxZ) / 2;
-      this.presets.region = { pos: [midX - span * 0.62, span * 0.5, midZ + span * 0.12], target: [midX, 0, midZ + span * 0.1] };
-      const f = map.factories[Math.floor((map.factories.length - 1) / 2)];
-      this.presets.factories = { pos: [f.x + 45, 38, f.faceZ + 55], target: [f.x, 2, f.z + 4] };
-      const st = map.stores[Math.floor((map.stores.length - 1) / 2)];
-      this.presets.stores = { pos: [st.x + 40, 34, st.faceZ - 48], target: [st.x, 2, st.z] };
+      this.presets.region = { pos: [midX + span * 0.12, span * 0.78, midZ + span * 0.62], target: [midX + span * 0.08, 0, midZ + span * 0.02] };
+      // Factory and store views look at a site from the road side, slightly off centre.
+      const siteView = (s, back, up) => {
+        const p = s.toWorld(40, s.faceV - back);
+        const t = s.toWorld(0, s.faceV + s.depth / 2 - 4);
+        return { pos: [p.x, up, p.z], target: [t.x, 2, t.z] };
+      };
+      this.presets.factories = siteView(map.factories[0], 55, 38);
+      this.presets.stores = siteView(map.stores[0], 48, 34);
     }
     this.tween = null;
     this.rideIndex = 0;

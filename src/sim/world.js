@@ -50,7 +50,8 @@ export class World {
     this.sim.onTruckGone = (t) => this.truckLeftWarehouse(t);
     const rng = (this.rng = makeRng(s.seed * 31 + 5));
     this.C = makeCoords(this.sim.layout);
-    this.map = buildMap(this.C, s.factories, s.stores);
+    // The map has its own dice, so the same seed always gives the same map.
+    this.map = buildMap(this.C, s.factories, s.stores, makeRng(s.seed * 17 + 3));
     const products = this.sim.products;
 
     this.factories = this.map.factories.map((m) => {
@@ -330,14 +331,16 @@ export class World {
     f.docks[d].truck = t.id;
     po.truck = t.id;
     const path = this.map.paths.garageToDock(f, d);
-    this.place(t, { x: f.garage.x - 6, z: f.serviceZ }, 0);
+    const start = this.map.paths.garageStart(f);
+    this.place(t, start, start.heading);
     this.go(t, path, 'toFactoryDock');
   }
 
   dispatchLaneTruck(lane) {
     const t = this.newTruck({ kind: 'out', lane: lane.id, label: 'Depot → Warehouse' });
     lane.truck = t.id;
-    this.place(t, this.map.depot, Math.PI);
+    const start = this.map.paths.depotStart();
+    this.place(t, start, start.heading);
     this.go(t, this.map.paths.depotToLane(lane.x), 'toLane');
   }
 

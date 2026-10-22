@@ -48,3 +48,15 @@ for (const [label, settings] of [
   assert.ok(maxTrucks <= 4 * (w.factories.length + w.stores.length), 'no unnecessary trucks');
 }
 console.log('all good');
+
+// Every random map must connect every site to the warehouse and the depot.
+for (let seed = 1; seed <= 200; seed++) {
+  for (const [factories, stores] of [[3, 3], [8, 8], [3, 8], [8, 3]]) {
+    const w = new World({ seed, factories, stores });
+    const P = w.map.paths;
+    for (const f of w.factories) { P.factoryToWarehouse(f, 0); P.warehouseToGarage(f); }
+    for (const s of w.stores) { P.laneToStore(w.lanes[0].x, s); P.storeToDepot(s); }
+    P.depotToLane(w.lanes[0].x);
+  }
+}
+console.log('800 random maps: every road connects');

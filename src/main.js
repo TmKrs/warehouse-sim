@@ -24,6 +24,8 @@ const world = new World({
   factories: num('factories', 3, 8),
   stores: num('stores', 3, 8),
   customersPerHour: num('customersPerHour', 4, 40),
+  // A new random map on every start, unless the address bar names one.
+  seed: params.has('seed') ? num('seed', 1, 1e9) : 1 + Math.floor(Math.random() * 1e6),
 });
 const sim = world.sim;
 const L = sim.layout;
@@ -48,7 +50,7 @@ const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI * 0.49;
 controls.minDistance = 3;
-controls.maxDistance = 700;
+controls.maxDistance = 1000;
 
 const hemi = new THREE.HemisphereLight(0xdbeafe, 0x4b5563, 1.0);
 scene.add(hemi);
@@ -70,7 +72,10 @@ const THEMES = {
 function setTheme(name) {
   const t = THEMES[name] || THEMES.day;
   scene.background = new THREE.Color(t.bg);
-  scene.fog = new THREE.Fog(t.fog, 350, 1400);
+  // Fog starts beyond the region, so bigger maps stay clear.
+  const b = world.map.bounds;
+  const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ);
+  scene.fog = new THREE.Fog(t.fog, span * 1.1, span * 3.5);
   hemi.intensity = t.hemi;
   sun.intensity = t.sun;
   renderer.toneMappingExposure = t.exposure;
