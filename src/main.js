@@ -27,6 +27,7 @@ const world = new World({
   factories: num('factories', 3, 8),
   stores: num('stores', 3, 8),
   customersPerHour: num('customersPerHour', 4, 40),
+  trucksPerFactory: num('trucksPerFactory', 1, 3),
   // A new random map on every start, unless the address bar names one.
   seed: params.has('seed') ? num('seed', 1, 1e9) : 1 + Math.floor(Math.random() * 1e6),
 });
@@ -113,6 +114,7 @@ const ui = new Ui(world, {
     const q = new URLSearchParams({
       robots: settings.robots, factories: settings.factories, stores: settings.stores,
       customersPerHour: world.settings.customersPerHour,
+      trucksPerFactory: world.settings.trucksPerFactory,
     });
     location.search = q.toString();
   },

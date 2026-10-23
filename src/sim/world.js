@@ -8,6 +8,7 @@ import { makeRng } from './random.js';
 import { FactoryFloor } from './factoryFloor.js';
 import { StoreFloor } from './storeFloor.js';
 import { makeCoords } from '../render/coords.js';
+import { Yard, STALLS } from './yard.js';
 
 export const CLOCK_SPEED = 30; // 1 real second = 30 clock seconds
 export const START_HOUR = 6;
@@ -18,6 +19,7 @@ export const DEFAULT_WORLD = {
   stores: 3,
   customersPerHour: 12, // all stores together
   targetFill: 0.8,
+  trucksPerFactory: 2, // each factory owns this many trucks
   seed: 7,
 };
 
@@ -50,8 +52,10 @@ export class World {
     const s = (this.settings = { ...DEFAULT_WORLD, ...settings });
     this.sim = new Sim({ robots: s.robots, targetFill: s.targetFill, seed: s.seed, chain: true, lanes: s.stores });
     this.sim.onTruckGone = (t) => this.truckLeftWarehouse(t);
+    this.sim.exitBusy = () => this.returns.length > 0;
     const rng = (this.rng = makeRng(s.seed * 31 + 5));
     this.C = makeCoords(this.sim.layout);
+    this.sim.yardPlan = new Yard(this.C, this.sim.docks);
     // The map has its own dice, so the same seed always gives the same map.
     this.map = buildMap(this.C, s.factories, s.stores, makeRng(s.seed * 17 + 3));
     const products = this.sim.products;
@@ -365,12 +369,30 @@ export class World {
     if (this.time < this.nextFactoryTruck) return;
     for (const f of this.factories) {
       if (this.time < f.nextTruckAt) continue;
+      if (this.fleetInUse(f) >= this.settings.trucksPerFactory) continue;
+      if (this.headedToWarehouse() >= STALLS) return; // the parking lot would overflow
       const po = f.orders.find((o) => o.status === 'waiting' && !o.truck);
       if (!po || !this.dispatchFactoryTruck(f, po)) continue;
       f.nextTruckAt = this.time + 40;
       this.nextFactoryTruck = this.time + 4;
       return;
     }
+  }
+
+  // Trucks of this factory that are out: on the road, at the warehouse or driving home.
+  fleetInUse(f) {
+    let n = this.returns.filter((r) => r.f === f).length;
+    for (const t of this.trucks) if (t.factory === f.id && (t.kind === 'in' || t.kind === 'return')) n++;
+    for (const t of this.sim.trucks) if (t.from === f.id && t.status !== 'gone') n++;
+    return n;
+  }
+
+  // Full trucks on the road to the warehouse or waiting in its parking lot.
+  headedToWarehouse() {
+    let n = 0;
+    for (const t of this.trucks) if (t.kind === 'in') n++;
+    for (const t of this.sim.trucks) if (t.status === 'planned' || t.status === 'yard') n++;
+    return n;
   }
 
   // Is there room for a truck at this spot? Used before a truck appears.
@@ -408,7 +430,8 @@ export class World {
     const po = f.orders.find((o) => o.id === simTruck.po);
     if (po) po.status = 'delivered';
     f.orders = f.orders.filter((o) => o.status !== 'delivered');
-    this.returns.push({ f, color: simTruck.color });
+    this.returns.push({ f, color: simTruck.color, simTruck });
+    simTruck.atExit = true;
   }
 
   // Empty trucks drive home from the warehouse yard one at a time, when there is room.
@@ -416,7 +439,8 @@ export class World {
     if (!this.returns.length) return;
     const p = this.map.yardExitCentre;
     if (!this.roomFor(p, 0)) return;
-    const { f, color } = this.returns.shift();
+    const { f, color, simTruck } = this.returns.shift();
+    simTruck.atExit = false;
     const t = this.newTruck({ kind: 'return', factory: f.id, label: `Warehouse → ${f.name} (empty)` });
     t.color = color;
     this.place(t, p, 0);
@@ -430,11 +454,9 @@ export class World {
       t.state = 'docked';
       t.label = `Loading at ${this.factories[t.factory].name}`;
     } else if (t.phase === 'toWarehouse') {
-      // Hand over to the warehouse yard.
-      const f = this.factories[t.factory];
-      const st = this.sim.receiveTruck({ name: t.name, load: t.cargo, planned: t.eta, color: t.color, from: f.id });
-      st.po = t.po;
-      this.remove(t);
+      t.state = 'gate';
+      t.label = 'Waiting at the warehouse gate';
+      this.enterYard(t);
     } else if (t.phase === 'toLane') {
       t.state = 'docked';
       t.label = `Loading at shipping lane ${t.lane + 1}`;
@@ -447,6 +469,15 @@ export class World {
     }
   }
 
+  // Hand a truck at the gate over to the warehouse yard once the parking lot has room.
+  enterYard(t) {
+    if (!this.sim.yardOpen()) return;
+    const f = this.factories[t.factory];
+    const st = this.sim.receiveTruck({ name: t.name, load: t.cargo, planned: t.eta, color: t.color, from: f.id });
+    st.po = t.po;
+    this.remove(t);
+  }
+
   remove(t) {
     this.trucks = this.trucks.filter((x) => x !== t);
     this.releaseZones(t, true);
@@ -455,6 +486,10 @@ export class World {
   // Loading at factories and unloading at stores.
   handleDocked(t) {
     const now = this.time;
+    if (t.state === 'gate') {
+      this.enterYard(t);
+      return;
+    }
     if (t.kind === 'in' && t.state === 'docked') {
       const f = this.factories[t.factory];
       const po = f.orders.find((o) => o.id === t.po);

@@ -212,6 +212,7 @@ export class Sim {
   }
 
   updateTrucks(now) {
+    const Y = this.yardPlan; // the parking lot and its routes (supply chain only)
     for (const t of this.trucks) {
       if (t.status === 'planned' && now >= t.arrival) {
         t.status = 'yard';
@@ -221,23 +222,34 @@ export class Sim {
         const diff = Math.round((t.arrival - t.planned) / 60);
         const note = t.late ? `${diff} min late` : t.arrival < t.planned - 10 ? 'early' : 'on time';
         this.log(`${t.name} arrived ${note} with ${t.load.length} boxes.`, t.late ? 'warn' : 'info');
+        if (Y) {
+          t.stall = this.freeStall();
+          t.moveTime = Y.park(t.stall).time;
+          this.lastParker = t;
+        }
         this.yard.push(t);
       }
     }
-    // Trucks in the yard take the next free dock.
+    // Parked trucks take the next free dock, one manoeuvre at a time.
     for (const d of this.docks) {
-      if (!d.truck && this.yard.length) {
-        const t = this.yard.shift();
-        d.truck = t;
-        t.dock = d.id;
-        t.status = 'docking';
-        t.statusSince = now;
-      }
+      if (d.truck || !this.yard.length) continue;
+      const i = Y ? this.yard.findIndex((t) => now - t.statusSince >= t.moveTime) : 0;
+      if (i < 0 || (Y && !this.mayDock(d, now))) continue;
+      const t = this.yard.splice(i, 1)[0];
+      d.truck = t;
+      t.dock = d.id;
+      t.status = 'docking';
+      t.statusSince = now;
+      if (Y) {
+        const r = Y.dock(t.stall, d.id);
+        t.moveTime = r.time;
+        t.clearAt = now + r.clear;
+      } else t.moveTime = TRUCK_MOVE_SECONDS;
     }
     for (const d of this.docks) {
       const t = d.truck;
       if (!t) continue;
-      if (t.status === 'docking' && now - t.statusSince >= TRUCK_MOVE_SECONDS) {
+      if (t.status === 'docking' && now - t.statusSince >= t.moveTime) {
         t.status = 'unloading';
         t.statusSince = now;
         t.nextUnload = now;
@@ -251,12 +263,13 @@ export class Sim {
           d.buffer.push(box.id);
           t.nextUnload = now + UNLOAD_SECONDS;
         }
-        if (t.unloaded >= t.load.length) {
+        if (t.unloaded >= t.load.length && (!Y || this.mayLeave(d))) {
           t.status = 'leaving';
           t.statusSince = now;
+          t.moveTime = Y ? Y.leave(d.id).time : TRUCK_MOVE_SECONDS;
         }
       }
-      if (t.status === 'leaving' && now - t.statusSince >= TRUCK_MOVE_SECONDS) {
+      if (t.status === 'leaving' && now - t.statusSince >= t.moveTime) {
         t.status = 'gone';
         t.statusSince = now;
         d.truck = null;
@@ -265,6 +278,45 @@ export class Sim {
       }
     }
     if (this.trucks.length > 60) this.trucks = this.trucks.filter((t) => t.status !== 'gone' || now - t.statusSince < 120);
+  }
+
+  // ---------- truck yard (supply chain) ----------
+  // Stalls taken by trucks that are parked, pulling in, or still pulling out.
+  freeStall() {
+    const used = new Set();
+    for (const t of this.trucks) if (t.status === 'yard' || t.status === 'docking') used.add(t.stall);
+    for (let i = 0; i < this.yardPlan.stallX.length; i++) if (!used.has(i)) return i;
+    return -1;
+  }
+
+  // Can a truck at the gate drive in? Needs a free stall and the entry lane clear.
+  yardOpen() {
+    if (!this.yardPlan) return true;
+    if (this.trucks.some((t) => t.status === 'planned')) return false;
+    const last = this.lastParker;
+    if (last && last.status === 'yard' && this.time - last.statusSince < last.moveTime) return false;
+    return this.freeStall() >= 0;
+  }
+
+  // A truck may start for dock d when no other truck is still swinging round,
+  // and no truck is leaving from a dock to the west (it would cross d's lane).
+  mayDock(d, now) {
+    for (const o of this.docks) {
+      const t = o.truck;
+      if (!t) continue;
+      if (t.status === 'docking' && now < t.clearAt) return false;
+      if (t.status === 'leaving' && o.x < d.x) return false;
+    }
+    return true;
+  }
+
+  // A truck may leave dock d when nobody is backing up to a dock east of it,
+  // and the exit is free (the empty truck waits there until it can join the road).
+  mayLeave(d) {
+    if (this.exitBusy?.()) return false;
+    for (const o of this.docks) if (o.truck && o.truck.status === 'docking' && o.x > d.x) return false;
+    for (const o of this.docks) if (o !== d && o.truck && o.truck.status === 'leaving') return false;
+    return true;
   }
 
   // A truck from a factory reached the warehouse gate (supply chain mode).

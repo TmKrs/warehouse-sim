@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import { World, CLOCK_SPEED } from '../src/sim/world.js';
 import { TICK } from '../src/sim/sim.js';
+import { yardPose } from '../src/sim/yard.js';
 
 // Two trucks (11 m by 2.5 m boxes) touch? Separating axis test.
 function touching(a, b) {
@@ -30,6 +31,8 @@ function run(settings, days) {
   let maxTrucks = 0;
   let firstMinute = 0;
   let maxStored = 0;
+  let maxFleet = 0;
+  let maxGate = 0;
   const t0 = Date.now();
   for (let i = 0; i < ticks; i++) {
     w.step();
@@ -50,11 +53,32 @@ function run(settings, days) {
         if (Math.hypot(A.x - B.x, A.z - B.z) < 12) assert.ok(!touching(A, B), `${A.name} and ${B.name} crashed at ${A.x.toFixed(1)},${A.z.toFixed(1)}`);
       }
     }
+    // Nor in the warehouse's parking lot, at the docks or at the exit.
+    const Y = w.sim.yardPlan;
+    const yard = w.sim.trucks
+      .filter((t) => t.status !== 'planned' && (t.status !== 'gone' || t.atExit))
+      .map((t) => {
+        const p = yardPose(Y, t, w.time - t.statusSince);
+        return { name: `${t.name} (${t.status})`, x: p.x, z: p.z, heading: p.h };
+      });
+    const all = [...yard, ...w.trucks.filter((t) => !(t.kind === 'return' && Math.hypot(t.x - Y.exit.x, t.z - Y.exit.z) < 0.5))];
+    for (let a = 0; a < yard.length; a++) {
+      for (let b = a + 1; b < all.length; b++) {
+        const A = yard[a];
+        const B = all[b];
+        if (Math.hypot(A.x - B.x, A.z - B.z) < 12) assert.ok(!touching(A, B), `${A.name} and ${B.name} overlap in the yard at ${A.x.toFixed(1)},${A.z.toFixed(1)} (t=${w.time.toFixed(1)})`);
+      }
+    }
+    for (const f of w.factories) maxFleet = Math.max(maxFleet, w.fleetInUse(f));
+    for (const t of w.trucks) {
+      if (t.state === 'gate') t.gateWait = (t.gateWait ?? 0) + TICK;
+      maxGate = Math.max(maxGate, t.gateWait ?? 0);
+    }
     if (w.time < 60) firstMinute = Math.max(firstMinute, w.trucks.filter((t) => t.kind === 'in').length);
     maxTrucks = Math.max(maxTrucks, w.trucks.length);
     maxStored = Math.max(maxStored, w.sim.stored);
   }
-  return { w, ms: Date.now() - t0, maxTrucks, maxStored, firstMinute };
+  return { w, ms: Date.now() - t0, maxTrucks, maxStored, firstMinute, maxFleet, maxGate };
 }
 
 for (const [label, settings] of [
@@ -62,19 +86,23 @@ for (const [label, settings] of [
   ['8 factories, 8 stores, 16 robots', { seed: 3, factories: 8, stores: 8, robots: 16, customersPerHour: 20 }],
   ['3 factories, 8 stores', { seed: 11, factories: 3, stores: 8 }],
   ['5 factories, 5 stores', { seed: 21, factories: 5, stores: 5 }],
+  ['8 factories, 3 stores, 3 trucks each', { seed: 5, factories: 8, stores: 3, trucksPerFactory: 3, customersPerHour: 30 }],
 ]) {
-  const { w, ms, maxTrucks, maxStored, firstMinute } = run(settings, 3);
+  const { w, ms, maxTrucks, maxStored, firstMinute, maxFleet, maxGate } = run(settings, 3);
   const s = w.summary();
   const ws = w.sim.summary();
   const lostPct = (100 * s.lost) / Math.max(1, s.sold + s.lost);
   console.log(
     `${label}: ${ms} ms | sold ${s.sold}, lost ${s.lost} (${lostPct.toFixed(1)}%) | warehouse max ${maxStored}/${ws.capacity} | ` +
-      `orders on time ${ws.ordersOnTime} late ${ws.ordersLate} | trips ${w.stats.trips} | most trucks at once ${maxTrucks}`,
+      `orders on time ${ws.ordersOnTime} late ${ws.ordersLate} | trips ${w.stats.trips} | most trucks at once ${maxTrucks} | ` +
+      `longest wait at the gate ${maxGate.toFixed(0)} s`,
   );
   assert.ok(s.sold > 300, 'stores should sell');
   assert.ok(lostPct < 15, 'stores should rarely run out');
   assert.ok(maxStored <= ws.capacity * 0.9, 'warehouse should never overflow');
   assert.ok(maxTrucks <= 4 * (w.factories.length + w.stores.length), 'no unnecessary trucks');
+  assert.ok(maxFleet <= w.settings.trucksPerFactory, 'a factory has no more trucks than allowed');
+  assert.ok(maxGate < 120, 'trucks should not wait long at the warehouse gate');
   assert.ok(firstMinute <= Math.ceil(w.factories.length / 2) + 1, 'factories should not all send trucks at the start');
 }
 console.log('all good');

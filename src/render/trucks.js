@@ -1,8 +1,9 @@
-// Trucks driving in, waiting in the yard, backing up to a dock and leaving.
+// Trucks driving in, parking in the lot, backing up to a dock and leaving.
 import * as THREE from 'three';
-import { clamp01, ease } from './coords.js';
 import { Batch } from './merge.js';
 import { shiny } from './look.js';
+import { yardPose } from '../sim/yard.js';
+import { TRUCK_HALF } from '../sim/map.js';
 
 const TRAILER_LEN = 8.5;
 
@@ -139,12 +140,10 @@ export class TruckViews {
 
   // now: warehouse time in seconds, smoothed between ticks.
   update(sim, now) {
-    const C = this.C;
+    const Y = sim.yardPlan;
     const alive = new Set();
-    const yardZ = C.frontZ - 30;
-    const yardX = (i) => -C.width / 2 + 4 + i * 4.2;
     for (const t of sim.trucks) {
-      if (t.status === 'planned' || t.status === 'gone') continue;
+      if (t.status === 'planned' || (t.status === 'gone' && !t.atExit)) continue;
       alive.add(t.id);
       let v = this.views.get(t.id);
       if (!v) {
@@ -152,60 +151,10 @@ export class TruckViews {
         this.views.set(t.id, v);
         this.scene.add(v);
       }
-      const since = now - t.statusSince;
-      let x;
-      let z;
-      let rot;
-      if (t.status === 'yard') {
-        const i = Math.max(0, sim.yard.indexOf(t));
-        // Drive in from the road on the left, then wait in a yard bay (facing the warehouse, cab away).
-        const p = ease(clamp01(since / 5));
-        x = -C.width / 2 - 40 + (yardX(i) + C.width / 2 + 40) * p;
-        z = yardZ + 4.5;
-        rot = -Math.PI / 2;
-        t._yardX = x;
-      } else {
-        const dock = sim.docks[t.dock];
-        const dockX = C.x(dock.x);
-        const dockZ = C.frontZ - 1.6;
-        if (t.status === 'docking') {
-          const startX = t._yardX ?? -C.width / 2 - 20;
-          const p = clamp01(since / 6);
-          if (p < 0.45) {
-            // Pull forward from the yard to in front of the dock, turning on the way.
-            const q = ease(p / 0.45);
-            x = startX + (dockX - startX) * q;
-            z = yardZ + 4.5 + (dockZ - 14 - (yardZ + 4.5)) * q;
-            rot = -Math.PI / 2 * (1 - q);
-          } else {
-            // Back up to the dock.
-            const q = ease((p - 0.45) / 0.55);
-            x = dockX;
-            z = dockZ - 14 + 14 * q;
-            rot = 0;
-          }
-        } else if (t.status === 'unloading') {
-          x = dockX;
-          z = dockZ;
-          rot = 0;
-        } else {
-          // Leaving: drive away from the dock and off to the right.
-          const p = clamp01(since / 6);
-          if (p < 0.5) {
-            const q = ease(p / 0.5);
-            x = dockX;
-            z = dockZ - q * 12;
-            rot = 0;
-          } else {
-            const q = ease((p - 0.5) / 0.5);
-            rot = -Math.PI / 2 * Math.min(1, q * 3);
-            x = dockX + q * (C.rightX + 30 - dockX);
-            z = dockZ - 12 - Math.min(1, q * 3) * 4;
-          }
-        }
-      }
-      v.position.set(x, 0, z);
-      v.rotation.y = rot;
+      const p = yardPose(Y, t, now - t.statusSince);
+      // The model's origin is the rear doors and it points toward -z.
+      v.position.set(p.x - Math.cos(p.h) * TRUCK_HALF, 0, p.z - Math.sin(p.h) * TRUCK_HALF);
+      v.rotation.y = -p.h - Math.PI / 2;
     }
     for (const [id, v] of this.views) {
       if (!alive.has(id)) {
